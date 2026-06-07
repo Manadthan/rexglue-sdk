@@ -834,6 +834,28 @@ std::optional<KernelState::RecompiledModuleInfo> KernelState::FindRecompiledModu
     if (info.guest_path == normalized)
       return info;
   }
+  // [futari] Basename fallback. Load resolves a module by its guest path
+  // (game:\..\reco_normal.xex), but UserModule::LoadFromFile stores
+  // path_ = fs_entry->absolute_path() (e.g. \Device\Harddisk0\Partition1\..\
+  // reco_normal.xex), which normalizes differently — so unload's
+  // FindRecompiledModule(module->path()) would miss, skip UnregisterModule, and
+  // leak the dispatcher table entry (breaking same-base module hot-swap between
+  // game modes). Module filenames are unique, so match on the base name.
+  // Extract it ourselves (last '/' or '\') and compare case-insensitively,
+  // because the two path forms use different separators.
+  auto base_name = [](std::string_view s) {
+    auto pos = s.find_last_of("/\\");
+    std::string n(pos == std::string_view::npos ? s : s.substr(pos + 1));
+    for (auto& c : n) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    return n;
+  };
+  auto want_name = base_name(guest_path);
+  if (!want_name.empty()) {
+    for (const auto& info : recompiled_modules_) {
+      if (base_name(info.guest_path) == want_name)
+        return info;
+    }
+  }
   return std::nullopt;
 }
 

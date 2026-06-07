@@ -107,8 +107,24 @@ add_compile_options(
     $<$<CONFIG:DEBUG>:-O0>
     $<$<CONFIG:RELEASE>:-O3>
     $<$<CONFIG:RELEASE>:-DNDEBUG>
-    -fno-char8_t
 )
+
+# Disable C++20 char8_t so u8"" literals stay char[] (the codebase relies on
+# them converting to std::string/std::string_view). clang-cl silently ignores
+# the GNU spelling -fno-char8_t ("unknown argument"), so it needs the MSVC
+# spelling /Zc:char8_t- instead.
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_compile_options(/Zc:char8_t-)
+    # rexcore/memory.cpp (and the SIMD recomp units) use SSSE3+ intrinsics like
+    # _mm_shuffle_epi8. rexglue_apply_target_settings only adds the SSE baseline
+    # for "NOT MSVC", but clang-cl reports as MSVC, so set it here for the MSVC
+    # frontend on x86_64. clang-cl needs the /clang: prefix to forward -m flags.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+        add_compile_options(/clang:-msse4.1)
+    endif()
+else()
+    add_compile_options(-fno-char8_t)
+endif()
 
 # Platform detection (supports AMD64 and ARM64)
 if(WIN32)

@@ -28,8 +28,12 @@ function(rexglue_apply_target_settings target_name)
         endif()
     endif()
 
-    if(NOT MSVC)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        # SSE4.1 baseline (recomp SIMD + byte-swap intrinsics). clang-cl reports
+        # as MSVC and needs the /clang: prefix to forward the -m flag.
+        if(MSVC)
+            target_compile_options(${target_name} PRIVATE /clang:-msse4.1)
+        else()
             target_compile_options(${target_name} PRIVATE -msse4.1)
         endif()
     endif()
@@ -58,6 +62,23 @@ function(rexglue_configure_target target_name)
 
     target_sources(${target_name} PRIVATE
         ${REXGLUE_SHARE_DIR}/rex_app.cpp)
+
+    # rex_app.cpp pulls in imgui headers (console overlay, drawer, etc.). imgui
+    # is linked PRIVATE to rexruntime, so its include dir is not on the
+    # rex::runtime interface; add it here for the consumer's own translation
+    # units. Headers only — the imgui implementation lives in rexruntime.dll.
+    if(TARGET imgui)
+        target_include_directories(${target_name} PRIVATE
+            $<TARGET_PROPERTY:imgui,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
+
+    # rexcore is linked PRIVATE to rexruntime, so its PUBLIC include dirs (which
+    # include the generated ${BINARY_DIR}/include holding rex/version.h) don't
+    # reach consumers of rex::runtime. rex_app.cpp needs them; propagate here.
+    if(TARGET rexcore)
+        target_include_directories(${target_name} PRIVATE
+            $<TARGET_PROPERTY:rexcore,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
 
     target_compile_definitions(${target_name} PRIVATE
         REXGLUE_BUILD_CONFIG="$<CONFIG>")

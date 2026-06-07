@@ -19,6 +19,7 @@
 #include <rex/filesystem.h>
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/devices/stfs_container_device.h>
+#include <rex/logging/macros.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_device.h>
@@ -268,7 +269,14 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name, uint64_
   if (std::filesystem::exists(package_path)) {
     return X_ERROR_ALREADY_EXISTS;
   }
-  if (!std::filesystem::create_directories(package_path)) {
+  // Use the error_code overload: create_directories returns false (without an
+  // error) when the directory already exists, so the bool form spuriously
+  // reports ACCESS_DENIED. Only a populated error_code is a real failure.
+  std::error_code create_ec;
+  std::filesystem::create_directories(package_path, create_ec);
+  if (create_ec) {
+    REXLOG_ERROR("CreateContent: create_directories('{}') failed: {} (code {})",
+                 package_path.string(), create_ec.message(), create_ec.value());
     return X_ERROR_ACCESS_DENIED;
   }
   auto package = ResolvePackage(root_name, xuid, data);

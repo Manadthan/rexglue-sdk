@@ -519,6 +519,14 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
       auto stIt = ctx.config.switchTables.find(blockBase);
       if (stIt != ctx.config.switchTables.end()) {
         activeJt = &stIt->second;
+        // Manual [[switch_tables]] targets must also become labels (parity with
+        // the late-detected path below). Targets reachable ONLY via the table
+        // otherwise get a `goto loc_X` with no `loc_X:` emitted -> "use of
+        // undeclared label" compile errors in the generated module.
+        for (auto label : activeJt->targets) {
+          if (label != 0)
+            labels.emplace(label);
+        }
       } else {
         auto lateIt = lateJumpTables.find(blockBase);
         if (lateIt != lateJumpTables.end()) {

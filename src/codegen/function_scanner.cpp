@@ -1550,6 +1550,18 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
             REXCODEGEN_TRACE(
                 "detectJumpTable: bctr=0x{:08X} found slwi at 0x{:08X} indexReg now r{}", bctrAddr,
                 scanAddr, indexReg);
+          } else if (sh == 0 && mb == 0 && me == 31) {
+            // rlwinm rA,rS,0,0,31 == rotlwi rA,rS,0 == register copy (mr). The
+            // compiler often moves the index between registers before the table
+            // math (e.g. the bound `cmplwi` is on the source reg, the lwzx index
+            // on the dest). Trace through the copy so scanForBounds can find the
+            // bound -> otherwise the table is under-sized and out-of-range
+            // indices hit __builtin_trap(). (No scaling: it's a plain copy.)
+            indexReg = insn->M.RS;
+            finalIndexReg = indexReg;
+            REXCODEGEN_TRACE(
+                "detectJumpTable: bctr=0x{:08X} found reg-copy at 0x{:08X} indexReg now r{}",
+                bctrAddr, scanAddr, indexReg);
           } else {
             // Non-slwi rlwinm writes to indexReg, stop tracing
             REXCODEGEN_TRACE(
@@ -1813,7 +1825,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
 BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
                                     const CodeRegion& containingRegion,
                                     const std::unordered_set<uint32_t>& knownFunctions,
-                                    uint32_t pdataSize) {
+                                    uint32_t pdataSize,
+                                    const std::unordered_map<uint32_t, JumpTable>& manualSwitchTables) {
   BlockDiscoveryResult result;
   std::unordered_set<uint32_t> visited;
   std::unordered_set<uint32_t> blockStarts;
@@ -1902,7 +1915,20 @@ BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
           // bctr - try to detect jump table
           REXCODEGEN_TRACE("discoverBlocks: bctr at 0x{:08X} in func 0x{:08X}, funcEnd=0x{:08X}",
                            addr, entryPoint, funcEnd);
-          auto jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          // A manual [[switch_tables]] override wins over auto-detection: its
+          // targets must drive block discovery (extend funcEnd, create blocks)
+          // or targets reachable only via the table leave their code
+          // undiscovered -> "undeclared label" / missing code in the module.
+          std::optional<JumpTable> jt;
+          auto manualIt = manualSwitchTables.find(addr);
+          if (manualIt != manualSwitchTables.end()) {
+            jt = manualIt->second;
+            REXCODEGEN_TRACE(
+                "discoverBlocks: using manual switch table at bctr 0x{:08X} with {} targets", addr,
+                jt->targets.size());
+          } else {
+            jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          }
           if (jt) {
             REXCODEGEN_TRACE("discoverBlocks: detected jump table at bctr 0x{:08X} with {} targets",
                              addr, jt->targets.size());

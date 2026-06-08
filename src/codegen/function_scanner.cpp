@@ -1570,6 +1570,24 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
                 bctrAddr, indexReg, scanAddr);
             indexReg = 0xFF;  // Mark as invalid to stop further tracing
           }
+        } else if (insn->opcode == Opcode::mr ||
+                   (insn->opcode == Opcode::or_ && insn->X.RT == insn->X.RB)) {
+          // mr rA,rS  (== or rA,rS,rS): plain register copy. Like the rotlwi-0
+          // case, trace through to the source so scanForBounds finds the cmplwi
+          // bound, which is frequently on the pre-copy register.
+          indexReg = insn->X.RT;
+          finalIndexReg = indexReg;
+          REXCODEGEN_TRACE(
+              "detectJumpTable: bctr=0x{:08X} found mr-copy at 0x{:08X} indexReg now r{}", bctrAddr,
+              scanAddr, indexReg);
+        } else if (insn->opcode == Opcode::addi && insn->D.d == 0 && insn->D.RA != 0) {
+          // addi rA,rS,0: register copy (RA!=0 distinguishes it from `li rA,0`).
+          // Trace through to the source register.
+          indexReg = insn->D.RA;
+          finalIndexReg = indexReg;
+          REXCODEGEN_TRACE(
+              "detectJumpTable: bctr=0x{:08X} found addi-copy at 0x{:08X} indexReg now r{}",
+              bctrAddr, scanAddr, indexReg);
         } else {
           // Another instruction writes to indexReg, stop tracing
           REXCODEGEN_TRACE(

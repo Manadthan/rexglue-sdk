@@ -57,6 +57,9 @@ class MnkInputDriver final : public InputDriver,
   void UpdateMouseCapture();
   void SetKeyState(uint16_t vk, bool down);
   void EnqueueKeystroke(uint16_t vk_pad, bool down);
+  // Enqueue VK_PAD_* keystrokes (for XInputGetKeystroke / menu input) for every
+  // controller bind whose configured key matches the given physical key.
+  void EnqueueKeystrokesForKey(uint16_t vk, bool down);
 
   rex::ui::Window* attached_window_ = nullptr;
 

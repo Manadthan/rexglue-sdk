@@ -254,7 +254,44 @@ void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
   ks.flags = down ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
   ks.user_index = static_cast<uint8_t>(UserIndex());
   ks.hid_code = 0;
+  // Bound the queue: titles only drain it via XInputGetKeystroke (menus). If a
+  // title polls GetState (gameplay) instead, untouched keystrokes would
+  // otherwise accumulate forever. Drop the oldest beyond a small cap.
+  constexpr size_t kMaxKeystrokes = 32;
+  while (keystroke_queue_.size() >= kMaxKeystrokes) {
+    keystroke_queue_.pop();
+  }
   keystroke_queue_.push(ks);
+}
+
+void MnkInputDriver::EnqueueKeystrokesForKey(uint16_t vk, bool down) {
+  using VK = rex::ui::VirtualKey;
+  auto match = [&](const std::string& bind, VK pad) {
+    if (bind.empty())
+      return;
+    if (static_cast<uint16_t>(rex::ui::ParseVirtualKey(bind)) == vk)
+      EnqueueKeystroke(static_cast<uint16_t>(pad), down);
+  };
+  match(REXCVAR_GET(keybind_a), VK::kXInputPadA);
+  match(REXCVAR_GET(keybind_b), VK::kXInputPadB);
+  match(REXCVAR_GET(keybind_x), VK::kXInputPadX);
+  match(REXCVAR_GET(keybind_y), VK::kXInputPadY);
+  match(REXCVAR_GET(keybind_left_shoulder), VK::kXInputPadLShoulder);
+  match(REXCVAR_GET(keybind_right_shoulder), VK::kXInputPadRShoulder);
+  match(REXCVAR_GET(keybind_left_trigger), VK::kXInputPadLTrigger);
+  match(REXCVAR_GET(keybind_right_trigger), VK::kXInputPadRTrigger);
+  match(REXCVAR_GET(keybind_lstick_press), VK::kXInputPadLThumbPress);
+  match(REXCVAR_GET(keybind_rstick_press), VK::kXInputPadRThumbPress);
+  match(REXCVAR_GET(keybind_back), VK::kXInputPadBack);
+  match(REXCVAR_GET(keybind_start), VK::kXInputPadStart);
+  match(REXCVAR_GET(keybind_dpad_up), VK::kXInputPadDpadUp);
+  match(REXCVAR_GET(keybind_dpad_down), VK::kXInputPadDpadDown);
+  match(REXCVAR_GET(keybind_dpad_left), VK::kXInputPadDpadLeft);
+  match(REXCVAR_GET(keybind_dpad_right), VK::kXInputPadDpadRight);
+  match(REXCVAR_GET(keybind_lstick_up), VK::kXInputPadLThumbUp);
+  match(REXCVAR_GET(keybind_lstick_down), VK::kXInputPadLThumbDown);
+  match(REXCVAR_GET(keybind_lstick_left), VK::kXInputPadLThumbLeft);
+  match(REXCVAR_GET(keybind_lstick_right), VK::kXInputPadLThumbRight);
 }
 
 void MnkInputDriver::CenterCursor() {
@@ -310,7 +347,12 @@ void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
     return;
   std::lock_guard lock(state_mutex_);
   uint16_t vk = static_cast<uint16_t>(e.virtual_key());
+  bool was_down = (vk < 256) && key_down_[vk];
   SetKeyState(vk, true);
+  // Feed XInputGetKeystroke (the menu input path) once per physical press,
+  // not on OS auto-repeat, so keyboard can drive Xbox-360-style menus.
+  if (!was_down)
+    EnqueueKeystrokesForKey(vk, true);
 }
 
 void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
@@ -319,6 +361,7 @@ void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
   std::lock_guard lock(state_mutex_);
   uint16_t vk = static_cast<uint16_t>(e.virtual_key());
   SetKeyState(vk, false);
+  EnqueueKeystrokesForKey(vk, false);
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {

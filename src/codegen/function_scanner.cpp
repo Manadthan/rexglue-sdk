@@ -1840,11 +1840,10 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
 // Block Discovery
 //=============================================================================
 
-BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
-                                    const CodeRegion& containingRegion,
-                                    const std::unordered_set<uint32_t>& knownFunctions,
-                                    uint32_t pdataSize,
-                                    const std::unordered_map<uint32_t, JumpTable>& manualSwitchTables) {
+BlockDiscoveryResult discoverBlocks(
+    DecodedBinary& decoded, uint32_t entryPoint, const CodeRegion& containingRegion,
+    const std::unordered_set<uint32_t>& knownFunctions, uint32_t pdataSize,
+    const std::unordered_map<uint32_t, JumpTable>& manualSwitchTables) {
   BlockDiscoveryResult result;
   std::unordered_set<uint32_t> visited;
   std::unordered_set<uint32_t> blockStarts;

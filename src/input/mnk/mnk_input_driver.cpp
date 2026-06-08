@@ -324,8 +324,7 @@ void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
 
-  bool should_capture =
-      REXCVAR_GET(mnk_mouse_capture) && IsEnabled() && has_focus_ && is_active();
+  bool should_capture = REXCVAR_GET(mnk_mouse_capture) && IsEnabled() && has_focus_ && is_active();
 
   if (should_capture && !mouse_captured_) {
     mouse_captured_ = true;

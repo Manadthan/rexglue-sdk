@@ -846,7 +846,8 @@ std::optional<KernelState::RecompiledModuleInfo> KernelState::FindRecompiledModu
   auto base_name = [](std::string_view s) {
     auto pos = s.find_last_of("/\\");
     std::string n(pos == std::string_view::npos ? s : s.substr(pos + 1));
-    for (auto& c : n) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    for (auto& c : n)
+      c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
     return n;
   };
   auto want_name = base_name(guest_path);

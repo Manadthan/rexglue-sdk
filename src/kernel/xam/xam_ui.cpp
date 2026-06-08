@@ -339,8 +339,8 @@ static X_RESULT XamShowMessageBoxUICommon(mapped_wstring title_ptr, mapped_wstri
     ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
     if (imgui_drawer) {
       result = xeXamDispatchDialog<MessageBoxDialog>(
-          new MessageBoxDialog(imgui_drawer, title, text, buttons, active_button),
-          close, overlapped.guest_address());
+          new MessageBoxDialog(imgui_drawer, title, text, buttons, active_button), close,
+          overlapped.guest_address());
     } else {
       // Fallback to headless if no drawer available
       auto run = [result_ptr, active_button]() -> X_RESULT {
@@ -584,7 +584,8 @@ u32 XamShowMessageBoxUIEx_entry(u32 user_index, mapped_wstring title_ptr, mapped
                                 u32 flags, u32 unknown_unused, mapped_u32 result_ptr,
                                 mapped_void overlapped) {
   REXKRNL_DEBUG(
-      "XamShowMessageBoxUIEx({:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X})",
+      "XamShowMessageBoxUIEx({:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, {:08X}, "
+      "{:08X}, {:08X})",
       uint32_t(user_index), title_ptr.guest_address(), text_ptr.guest_address(),
       uint32_t(button_count), button_ptrs.guest_address(), uint32_t(active_button), uint32_t(flags),
       uint32_t(unknown_unused), result_ptr.guest_address(), overlapped.guest_address());

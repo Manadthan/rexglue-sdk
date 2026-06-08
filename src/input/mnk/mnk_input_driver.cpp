@@ -30,6 +30,9 @@ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller 
 REXCVAR_DEFINE_INT32(mnk_user_index, 0, "Input", "Controller slot (0-3) for MnK").range(0, 3);
 REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
     .range(0.01, 10.0);
+REXCVAR_DEFINE_BOOL(mnk_mouse_capture, true, "Input",
+                    "Capture/hide the mouse and map its motion to the right stick. Turn off for "
+                    "keyboard-only play (e.g. 2D games that don't use mouse aim).");
 
 REXCVAR_DEFINE_STRING(keybind_a, "Space", "Input/Keybinds/Controller", "A button");
 REXCVAR_DEFINE_STRING(keybind_b, "Shift", "Input/Keybinds/Controller", "B button");
@@ -198,10 +201,16 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
     ly -= INT16_MAX;
 
-  double sensitivity = REXCVAR_GET(mnk_sensitivity);
-  constexpr double kBaseScale = 200.0;
-  int32_t rx = static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale);
-  int32_t ry = static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale);
+  // Right stick from mouse motion — only when mouse capture is on; otherwise
+  // the cursor moves freely and its deltas would be meaningless/jittery.
+  int32_t rx = 0;
+  int32_t ry = 0;
+  if (REXCVAR_GET(mnk_mouse_capture)) {
+    double sensitivity = REXCVAR_GET(mnk_sensitivity);
+    constexpr double kBaseScale = 200.0;
+    rx = static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale);
+    ry = static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale);
+  }
   mouse_dx_ = 0;
   mouse_dy_ = 0;
 
@@ -315,7 +324,8 @@ void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
 
-  bool should_capture = IsEnabled() && has_focus_ && is_active();
+  bool should_capture =
+      REXCVAR_GET(mnk_mouse_capture) && IsEnabled() && has_focus_ && is_active();
 
   if (should_capture && !mouse_captured_) {
     mouse_captured_ = true;

@@ -48,6 +48,19 @@ uint32_t xeXamEnumerate(uint32_t handle, uint32_t flags, mapped_void buffer_ptr,
       result = X_ERROR_INVALID_PARAMETER;
     } else {
       result = e->WriteItems(buffer_ptr.guest_address(), buffer_ptr.as<uint8_t*>(), &item_count);
+      // A freshly-created, totally-empty content enumerator returns
+      // X_ERROR_NO_MORE_FILES on its very first read. Some titles (e.g.
+      // Mushihimesama Futari) expect an empty enumeration to complete with
+      // SUCCESS and 0 items, then branch on the item count; they treat
+      // NO_MORE_FILES here as a fatal error and abort the save-create flow
+      // (so a brand-new profile can never create its first save). Only remap
+      // the "never had any items" case (item_count()==0) so that a genuine
+      // end-of-enumeration *after* items were read still returns NO_MORE_FILES
+      // and terminates caller read-loops as before.
+      if (result == X_ERROR_NO_MORE_FILES && e->item_count() == 0) {
+        result = X_ERROR_SUCCESS;
+        item_count = 0;
+      }
     }
     extended_error = X_HRESULT_FROM_WIN32(result);
     length = item_count;

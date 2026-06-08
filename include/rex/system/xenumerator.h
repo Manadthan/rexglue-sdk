@@ -63,6 +63,12 @@ class XEnumerator : public XObject {
   virtual uint32_t WriteItems(uint32_t buffer_ptr, uint8_t* buffer_data,
                               uint32_t* written_count) = 0;
 
+  // Total number of items this enumerator will ever yield. Returns SIZE_MAX
+  // ("unknown") for enumerator kinds that don't track a finite count; concrete
+  // static enumerators override this. Used to distinguish a never-populated
+  // empty enumeration from a normal end-of-enumeration after items were read.
+  virtual size_t item_count() const { return SIZE_MAX; }
+
   size_t item_size() const { return item_size_; }
   size_t items_per_enumerate() const { return items_per_enumerate_; }
 
@@ -78,7 +84,7 @@ class XStaticUntypedEnumerator : public XEnumerator {
         item_count_(0),
         current_item_(0) {}
 
-  size_t item_count() const { return item_count_; }
+  size_t item_count() const override { return item_count_; }
 
   uint8_t* AppendItem();
 

@@ -582,6 +582,17 @@ X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_pat
     return X_ERROR_FILE_NOT_FOUND;
   }
 
+  // Idempotency: if this package was already installed (its .header exists),
+  // skip the (potentially huge) re-extraction so re-boots are fast. The
+  // package file_name is its on-disk name (the content/offer hash).
+  auto installed_file_name = rex::path_to_utf8(package_path.filename());
+  auto installed_header = ResolvePackageHeaderPath(
+      installed_file_name, 0, kernel_state_->title_id(), XContentType::kMarketplaceContent);
+  if (std::filesystem::exists(installed_header)) {
+    REXLOG_INFO("InstallContent: '{}' already installed, skipping", installed_file_name);
+    return X_ERROR_SUCCESS;
+  }
+
   // Mount the STFS package as a virtual filesystem device
   auto device = std::make_unique<rex::filesystem::StfsContainerDevice>("", package_path);
   if (!device->Initialize()) {
@@ -599,13 +610,26 @@ X_RESULT ContentManager::InstallContent(const std::filesystem::path& package_pat
   content_data.xuid = 0;
   content_data.set_file_name(file_name);
 
-  // Read display name from STFS metadata
-  auto display_name = device->header().metadata.display_name(rex::system::XLanguage::kEnglish);
-  if (!display_name.empty()) {
-    content_data.set_display_name(display_name);
-  } else {
-    content_data.set_display_name(rex::path_to_utf16(package_path.filename()));
+  // Read display name from STFS metadata. The English slot is often empty for
+  // JP-region DLC (e.g. Futari), so try the title name and every per-language
+  // display name and use the first non-empty. Log all candidates so we can see
+  // exactly what the package carries.
+  // Prefer the per-content display name (the specific content title, e.g.
+  // "...ブラックレーベル") over the generic parent title_name. The English slot is
+  // often empty for JP-region DLC, so scan every per-language display name and
+  // take the first non-empty; fall back to title_name, then the filename.
+  const auto& metadata = device->header().metadata;
+  std::u16string display_name;
+  for (uint32_t lang = 1; lang <= 12 && display_name.empty(); ++lang) {
+    display_name = metadata.display_name(static_cast<rex::system::XLanguage>(lang));
   }
+  if (display_name.empty()) {
+    display_name = metadata.title_name();
+  }
+  if (display_name.empty()) {
+    display_name = rex::path_to_utf16(package_path.filename());
+  }
+  content_data.set_display_name(display_name);
 
   auto install_path = ResolvePackagePath(0, content_data);
 

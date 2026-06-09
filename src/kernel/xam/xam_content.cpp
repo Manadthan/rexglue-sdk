@@ -107,7 +107,8 @@ u32 XamContentCreateEnumerator_entry(u32 user_index, u32 device_id, u32 content_
     // TODO(gibbed): disc drive content
   }
 
-  REXKRNL_DEBUG("XamContentCreateEnumerator: added {} items to enumerator", e->item_count());
+  REXKRNL_DEBUG("XamContentCreateEnumerator: type={:08X} added {} items to enumerator",
+                uint32_t(content_type), e->item_count());
 
   *handle_out = e->handle();
   return X_ERROR_SUCCESS;
@@ -224,6 +225,12 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
       *disposition_ptr = static_cast<uint32_t>(disposition);
     }
 
+    REXKRNL_DEBUG(
+        "XamContentCreate: root='{}' type={:08X} file='{}' flags={:#x} -> disposition={} "
+        "result={:#x}",
+        root_name, static_cast<uint32_t>(static_cast<XContentType>(content_data.content_type)),
+        content_data.file_name(), flags, static_cast<uint32_t>(disposition), uint32_t(result));
+
     extended_error = X_HRESULT_FROM_WIN32(result);
     length = static_cast<uint32_t>(disposition);
     return result;
@@ -301,17 +308,17 @@ u32 XamContentGetCreator_entry(u32 user_index, mapped_void content_data_ptr,
   bool content_exists = REX_KERNEL_STATE()->content_manager()->ContentExists(xuid, content_data);
 
   if (content_exists) {
-    if (content_data.content_type == XContentType::kSavedGame) {
-      // User always creates saves.
-      *is_creator_ptr = 1;
-      if (creator_xuid_ptr) {
-        *creator_xuid_ptr = xuid;
-      }
-    } else {
-      *is_creator_ptr = 0;
-      if (creator_xuid_ptr) {
-        *creator_xuid_ptr = 0;
-      }
+    // Treat any locally-installed content as owned by the current profile.
+    // Saves are always user-created; for marketplace/DLC content, reporting the
+    // current user as the creator is what makes installed DLC register as
+    // "owned" (titles like Futari call XamContentGetCreator to gate downloadable
+    // modes — e.g. Black Label. Returning creator=0/is_creator=0 here left it
+    // permanently locked with a "purchase from Marketplace" prompt despite the
+    // package being installed). There is no real Live account to distinguish a
+    // foreign creator, so owned-by-current-user is the correct offline answer.
+    *is_creator_ptr = 1;
+    if (creator_xuid_ptr) {
+      *creator_xuid_ptr = xuid;
     }
   } else {
     result = X_ERROR_PATH_NOT_FOUND;

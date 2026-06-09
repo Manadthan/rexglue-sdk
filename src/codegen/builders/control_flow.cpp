@@ -131,10 +131,15 @@ bool build_bctr(BuilderContext& ctx) {
       ctx.println("\tcase {}:", i);
       auto label = jt->targets[i];
 
-      // TODO(tomc): Figure out if this actually is triggered on real hardware and what would
-      // happen?
+      // An in-range case whose table slot read as null/padding (sentinel). The
+      // guest is not expected to index here; if it does, log a diagnosable
+      // FATAL with the bctr + case rather than __builtin_trap() (ud2), which
+      // crashes the host with STATUS_ILLEGAL_INSTRUCTION and no breadcrumb.
       if (label == 0) {
-        ctx.println("\t\t__builtin_trap(); // ERROR - detected jump to null value");
+        ctx.println(
+            "\t\tREX_FATAL(\"jump-table null sentinel at bctr 0x{:08X} case {}\"); // was jump to "
+            "null value",
+            ctx.base, i);
         continue;
       }
 
@@ -167,7 +172,18 @@ bool build_bctr(BuilderContext& ctx) {
     }
 
     ctx.println("\tdefault:");
-    ctx.println("\t\t__builtin_trap(); // Switch case out of range");
+    // The runtime index exceeded the cases recovered at codegen time (an
+    // under-sized jump table -- detectJumpTable can mis-size tables when it
+    // can't trace the index register or find its bound). Rather than
+    // __builtin_trap() (ud2 -> host STATUS_ILLEGAL_INSTRUCTION, undiagnosable),
+    // fall back to a faithful indirect dispatch on CTR, which still holds the
+    // guest-computed target from the mtctr that precedes this bctr (those
+    // instructions are emitted linearly, ahead of the switch). Resolves
+    // cleanly when the missing target is a real function; otherwise
+    // ResolveIndirectFunction reports the address so it can be seeded. This
+    // mirrors the no-jump-table bctr path below.
+    ctx.println("\t\tREX_CALL_INDIRECT_FUNC({}.u32);", ctx.ctr());
+    ctx.println("\t\treturn;");
     ctx.println("\t}}");
 
     ctx.reset_switch_table();

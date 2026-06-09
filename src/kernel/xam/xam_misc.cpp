@@ -12,6 +12,17 @@
 #include <rex/logging.h>
 #include <rex/hook.h>
 
+namespace rex::kernel::xam {
+// Background downloads require Xbox Live, which this runtime does not provide.
+// The title pokes XamBackgroundDownloadSetMode once at the title screen to
+// configure (disable) background downloads. This was a REX_EXPORT_STUB, which
+// logged a noisy "STUB" warning on every call and left r3 untouched. Report
+// X_ERROR_SUCCESS and ignore the mode so the caller proceeds cleanly.
+uint32_t XamBackgroundDownloadSetMode_entry() {
+  return 0;
+}
+}  // namespace rex::kernel::xam
+
 // kinda gross but oh well
 REX_EXPORT_STUB(__imp__CancelWaitableTimer);
 REX_EXPORT_STUB(__imp__ControlPackGetCursorPosition);
@@ -334,7 +345,8 @@ REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageOnContentChange);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadNetworkStorageRegisterChangeCallback);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSelectDevice);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetForegroundPriority);
-REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetMode);
+REX_EXPORT(__imp__XamBackgroundDownloadSetMode,
+           rex::kernel::xam::XamBackgroundDownloadSetMode_entry);
 REX_EXPORT_STUB(__imp__XamBackgroundDownloadSetPollingActive);
 REX_EXPORT_STUB(__imp__XamBase64Decode);
 REX_EXPORT_STUB(__imp__XamBeginDemand);

@@ -48,16 +48,23 @@ uint32_t xeXamEnumerate(uint32_t handle, uint32_t flags, mapped_void buffer_ptr,
       result = X_ERROR_INVALID_PARAMETER;
     } else {
       result = e->WriteItems(buffer_ptr.guest_address(), buffer_ptr.as<uint8_t*>(), &item_count);
-      // A freshly-created, totally-empty content enumerator returns
-      // X_ERROR_NO_MORE_FILES on its very first read. Some titles (e.g.
-      // Mushihimesama Futari) expect an empty enumeration to complete with
-      // SUCCESS and 0 items, then branch on the item count; they treat
-      // NO_MORE_FILES here as a fatal error and abort the save-create flow
-      // (so a brand-new profile can never create its first save). Only remap
-      // the "never had any items" case (item_count()==0) so that a genuine
-      // end-of-enumeration *after* items were read still returns NO_MORE_FILES
-      // and terminates caller read-loops as before.
-      if (result == X_ERROR_NO_MORE_FILES && e->item_count() == 0) {
+      // Mushihimesama Futari's save/enumerate code treats SUCCESS-with-0-items
+      // as its "no more entries, proceed" terminator and treats
+      // X_ERROR_NO_MORE_FILES as a FATAL error that aborts the flow. Two cases:
+      //   (1) Empty enumerator, first read -> NO_MORE_FILES => the original
+      //       first-ever-save-create bug (brand-new profile couldn't save).
+      //   (2) Non-empty enumerator (e.g. an existing system save), terminating
+      //       read AFTER the items were returned -> NO_MORE_FILES => the REPLAY
+      //       save bug: the replay machine enumerates SaveGame content, reads
+      //       the existing systemdata.bin item, then the next read returns
+      //       NO_MORE_FILES and it aborts ("リプレイデータの保存に失敗しました")
+      //       without ever calling XamContentCreate.
+      // The earlier fix only covered (1) (gated on e->item_count()==0), which
+      // left (2) broken. The title uses SUCCESS+0 as the terminator in BOTH
+      // cases (proven: case (1) proceeds correctly once remapped), and real
+      // hardware must behave the same since saving works on a 360. So always
+      // remap an exhausted read (no items written this call) to SUCCESS+0.
+      if (result == X_ERROR_NO_MORE_FILES) {
         result = X_ERROR_SUCCESS;
         item_count = 0;
       }

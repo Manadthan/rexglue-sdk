@@ -153,9 +153,13 @@ endif()
 add_compile_definitions(REXGLUE_BUILD_CONFIG="$<CONFIG>")
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_version.cmake)
+# SOURCE_DIR must be this directory, not the (default) top-level source dir:
+# when the SDK is consumed from a parent project's source tree, git describe
+# would otherwise run in the parent repo and miss the SDK's version tags.
 rex_resolve_version(REXGLUE_FULL_VERSION
     FLOOR_MAJOR ${PROJECT_VERSION_MAJOR}
-    FLOOR_MINOR ${PROJECT_VERSION_MINOR})
+    FLOOR_MINOR ${PROJECT_VERSION_MINOR}
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Strip the -id trailer (if any) for the numeric-only version.
 string(REGEX REPLACE "-.*$" "" REXGLUE_NUMERIC_VERSION "${REXGLUE_FULL_VERSION}")

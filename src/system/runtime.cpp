@@ -82,6 +82,10 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
   // Enable threading affinity configuration
   thread::EnableAffinityConfiguration();
 
+  // 1ms OS timer resolution: guest frame pacing (vblank delivery, swap
+  // acknowledgement, KeTimeStampBundle) runs on 1ms sleep/timer paths.
+  thread::EnableHighResolutionTiming();
+
   tool_mode_ = config.tool_mode;
 
   // Create memory system first

@@ -92,6 +92,12 @@ uint32_t logical_processor_count();
 // Must be called at startup before attempting to set thread affinity.
 void EnableAffinityConfiguration();
 
+// Raises the OS timer resolution to 1ms for the current process.
+// On Windows, sleeps and timers otherwise quantize to the default ~15.6ms
+// tick, which breaks guest frame pacing that round-trips through 1ms
+// sleep/timer paths (vblank delivery, KeTimeStampBundle updates).
+void EnableHighResolutionTiming();
+
 // Gets a stable thread-specific ID, but may not be. Use for informative
 // purposes only.
 uint32_t current_thread_system_id();

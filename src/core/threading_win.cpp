@@ -13,7 +13,11 @@ static_assert(REX_PLATFORM_WIN32, "This file is Windows-only");
 
 #include "platform_win.h"
 
+#include <timeapi.h>
+
 #include <spdlog/spdlog.h>
+
+#pragma comment(lib, "winmm.lib")
 
 #include <rex/assert.h>
 #include <rex/chrono/chrono_steady_cast.h>
@@ -31,6 +35,14 @@ void EnableAffinityConfiguration() {
   DWORD_PTR system_affinity_mask;
   GetProcessAffinityMask(process_handle, &process_affinity_mask, &system_affinity_mask);
   SetProcessAffinityMask(process_handle, system_affinity_mask);
+}
+
+void EnableHighResolutionTiming() {
+  // Timer resolution is per-process since Windows 10 2004; without this,
+  // ::Sleep(1) and 1ms waitable timers fire on the ~15.6ms system tick.
+  if (timeBeginPeriod(1) != TIMERR_NOERROR) {
+    spdlog::warn("timeBeginPeriod(1) failed; frame pacing may be degraded");
+  }
 }
 
 uint32_t current_thread_system_id() {

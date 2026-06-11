@@ -12,9 +12,11 @@
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/cvar.h>
 #include <rex/ui/keybinds.h>
+#include <rex/ui/window.h>
 #include <imgui.h>
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -154,6 +156,75 @@ static rex::ui::VirtualKey ImGuiKeyToVirtualKey(ImGuiKey key) {
   }
 }
 
+void SettingsDialog::DrawDisplaySection() {
+  const ImVec4 kRestartColor{1.0f, 1.0f, 0.4f, 1.0f};
+
+  ImGui::TextDisabled("Display");
+  ImGui::Separator();
+
+  // Resolution preset: sets the shared `resolution` cvar (guest video mode +
+  // startup window size). Applies on next launch.
+  static const char* kResolutionPresets[] = {"(default)", "1280x720",  "1600x900",
+                                             "1920x1080", "2560x1440", "3840x2160"};
+  std::string current_res = rex::cvar::Query<std::string>("resolution");
+  const char* preview = current_res.empty() ? kResolutionPresets[0] : current_res.c_str();
+  ImGui::Text("%-20s", "Resolution");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Render resolution and window size\n[Requires restart to take effect]");
+  }
+  ImGui::SameLine(240.0f);
+  ImGui::SetNextItemWidth(160.0f);
+  if (ImGui::BeginCombo("##display_resolution", preview)) {
+    bool current_is_preset = current_res.empty();
+    for (int i = 0; i < static_cast<int>(std::size(kResolutionPresets)); ++i) {
+      bool selected = (i == 0) ? current_res.empty() : (current_res == kResolutionPresets[i]);
+      current_is_preset = current_is_preset || selected;
+      if (ImGui::Selectable(kResolutionPresets[i], selected)) {
+        rex::cvar::SetFlagByName("resolution", (i == 0) ? "" : kResolutionPresets[i]);
+      }
+      if (selected)
+        ImGui::SetItemDefaultFocus();
+    }
+    // A hand-edited custom value still shows as the (selected) current entry.
+    if (!current_is_preset) {
+      ImGui::Selectable(current_res.c_str(), true);
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::SameLine();
+  ImGui::TextColored(kRestartColor, "[restart]");
+
+  // Fullscreen: applied to the window immediately, and mirrored into the
+  // `fullscreen` cvar so Save-to-config persists the current state.
+  Window* window = imgui_drawer()->window();
+  bool fullscreen = window ? window->IsFullscreen() : rex::cvar::Query<bool>("fullscreen");
+  ImGui::Text("%-20s", "Fullscreen");
+  ImGui::SameLine(240.0f);
+  if (ImGui::Checkbox("##display_fullscreen", &fullscreen)) {
+    if (window) {
+      // This draw callback runs inside the presenter's paint; resizing the
+      // surface mid-frame crashes the driver. Defer to the UI event loop.
+      window->app_context().CallInUIThreadDeferred(
+          [window, fullscreen] { window->SetFullscreen(fullscreen); });
+    }
+    rex::cvar::SetFlagByName("fullscreen", fullscreen ? "true" : "false");
+  }
+  ImGui::SameLine();
+  ImGui::TextDisabled("(%s)", rex::cvar::Query<std::string>("bind_fullscreen").c_str());
+
+  // VSync: read per-present by the command processor, applies immediately.
+  bool vsync = rex::cvar::Query<bool>("vsync");
+  ImGui::Text("%-20s", "VSync");
+  ImGui::SameLine(240.0f);
+  if (ImGui::Checkbox("##display_vsync", &vsync)) {
+    rex::cvar::SetFlagByName("vsync", vsync ? "true" : "false");
+  }
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("All settings");
+  ImGui::Separator();
+}
+
 void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   auto& registry = rex::cvar::GetRegistry();
 
@@ -288,6 +359,12 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   };
 
   ImGui::BeginChild("##cvars", ImVec2(0, -30.0f), false);
+
+  // Pinned quick-access section in the default (root) view.
+  if (!searching && selected_category_.empty()) {
+    DrawDisplaySection();
+  }
+
   for (auto& entry : registry) {
     // Filter by category (unless searching).
     if (!searching) {

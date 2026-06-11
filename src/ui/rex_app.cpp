@@ -20,6 +20,7 @@
 #include <rex/ui/overlay/console_overlay.h>
 #include <rex/ui/overlay/debug_overlay.h>
 #include <rex/ui/overlay/settings_overlay.h>
+#include <rex/ui/overlay/toast_overlay.h>
 #include <rex/graphics/graphics_system.h>
 #if REX_HAS_VULKAN
 #include <rex/graphics/vulkan/graphics_system.h>
@@ -44,6 +45,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <string_view>
+
+REXCVAR_DEFINE_BOOL(show_startup_hints, true, "UI",
+                    "Show keyboard shortcut hints (settings, fullscreen) briefly at startup");
 
 namespace rex {
 
@@ -294,6 +298,14 @@ bool ReXApp::SetupPresentation() {
   window_->AddListener(this);
   window_->AddInputListener(this, 0);
 
+  // Runtime fullscreen toggle. Also syncs the `fullscreen` cvar so the current
+  // state persists when the user saves the config from the settings overlay.
+  rex::ui::RegisterBind("bind_fullscreen", "F11", "Toggle fullscreen", [this] {
+    bool new_fullscreen = !window_->IsFullscreen();
+    window_->SetFullscreen(new_fullscreen);
+    REXCVAR_SET(fullscreen, new_fullscreen);
+  });
+
   if (REXCVAR_GET(fullscreen)) {
     window_->SetFullscreen(true);
   }
@@ -333,6 +345,14 @@ bool ReXApp::SetupPresentation() {
                 std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
           }
         });
+
+        if (REXCVAR_GET(show_startup_hints)) {
+          ui::ToastDialog::Show(imgui_drawer_.get(),
+                                fmt::format("{}  Settings      {}  Fullscreen      {}  Console",
+                                            rex::cvar::Query<std::string>("bind_settings"),
+                                            rex::cvar::Query<std::string>("bind_fullscreen"),
+                                            rex::cvar::Query<std::string>("bind_console")));
+        }
 
         OnCreateDialogs(imgui_drawer_.get());
       }
@@ -412,6 +432,7 @@ void ReXApp::OnDestroy() {
   rex::ui::UnregisterBind("bind_debug_overlay");
   rex::ui::UnregisterBind("bind_console");
   rex::ui::UnregisterBind("bind_settings");
+  rex::ui::UnregisterBind("bind_fullscreen");
 
   // ImGui cleanup (reverse of setup)
   settings_overlay_.reset();

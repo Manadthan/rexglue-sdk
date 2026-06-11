@@ -26,6 +26,10 @@ class SettingsDialog : public ImGuiDialog {
   void OnDraw(ImGuiIO& io) override;
 
  private:
+  // Quick-access display settings (resolution preset, fullscreen, vsync) shown
+  // above the generic cvar list when the root category is selected.
+  void DrawDisplaySection();
+
   std::filesystem::path config_path_;
   char search_buf_[128] = {};
   std::string selected_category_;

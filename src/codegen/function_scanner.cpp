@@ -204,12 +204,14 @@ enum class JumpTableType : u8 {
 // Helper struct for tracking pattern match state
 struct JumpTableMatch {
   JumpTableType type = JumpTableType::kAbsolute;
-  u8 ctr_source_reg = 0;  // Register moved to CTR
-  u8 table_reg = 0;       // Register holding table address
-  u8 base_reg = 0;        // Register holding base address (offset types)
-  u8 index_reg = 0;       // Register holding original switch index
-  u8 offset_reg = 0;      // Register holding loaded offset
-  u8 shift_amount = 0;    // Shift amount for COMPUTED type
+  u8 ctr_source_reg = 0;     // Register moved to CTR
+  u8 table_reg = 0;          // Register holding table address
+  u8 base_reg = 0;           // Register holding base address (offset types)
+  u8 index_reg = 0;          // Register holding original switch index (bounds tracing)
+  u8 emit_index_reg = 0xFF;  // Register the emitted switch reads at the bctr; never
+                             // retargeted through plain copies (see detectJumpTable)
+  u8 offset_reg = 0;         // Register holding loaded offset
+  u8 shift_amount = 0;       // Shift amount for COMPUTED type
   guest_addr_t table_high = 0;
   guest_addr_t table_low = 0;
   guest_addr_t base_high = 0;
@@ -574,6 +576,7 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
         // Initially assume RA=table, RB=index (will verify/swap later)
         match.table_reg = instr.X.RA;
         match.index_reg = instr.X.RB;
+        match.emit_index_reg = instr.X.RB;
         match.found_load = true;
         REXCODEGEN_TRACE("  [0x{:08X}] Found lwzx r{}, r{}, r{} (tentative table=r{}, index=r{})",
                          addr, static_cast<u32>(instr.X.RT), static_cast<u32>(instr.X.RA),
@@ -591,6 +594,7 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
         // Initially assume RA=table, RB=index
         match.table_reg = instr.X.RA;
         match.index_reg = instr.X.RB;
+        match.emit_index_reg = instr.X.RB;
         match.found_load = true;
         // Only set type if we haven't already found a shift (which means kComputed)
         if (!match.found_shift) {
@@ -607,6 +611,7 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
         match.type = JumpTableType::kShortOffset;
         match.table_reg = instr.X.RA;
         match.index_reg = instr.X.RB;
+        match.emit_index_reg = instr.X.RB;
         match.found_load = true;
         REXCODEGEN_TRACE("  [0x{:08X}] Found lhzx r{}, r{}, r{}", addr,
                          static_cast<u32>(instr.X.RT), static_cast<u32>(instr.X.RA),
@@ -620,6 +625,13 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
       // Check if this is scaling the index (for ABSOLUTE, SHORT, or offset-based types)
       // Must check BEFORE offset shift to handle SHORTOFFSET with scaled index
       if (match.found_load && instr.M.RA == match.index_reg) {
+        if (instr.M.SH > 0) {
+          // Real scale (slwi): the pre-shift register holds the case index at
+          // the bctr, so the emitted switch must read it.
+          match.emit_index_reg = instr.M.RS;
+        }
+        // SH==0 is a plain copy: keep emit_index_reg on the copy DEST (its
+        // value is what feeds the dispatch); retarget only the bounds reg.
         match.index_reg = instr.M.RS;
         match.found_shift = true;
         REXCODEGEN_TRACE("  [0x{:08X}] Found rlwinm (index scale) r{}, r{}, {}", addr,
@@ -681,6 +693,8 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
         REXCODEGEN_TRACE("  [0x{:08X}] Found lis for index_reg r{}, swapping table/index", addr,
                          static_cast<u32>(instr.D.RT));
         std::swap(match.table_reg, match.index_reg);
+        if (!match.found_shift)
+          match.emit_index_reg = match.index_reg;
         match.table_high = static_cast<guest_addr_t>(instr.D.UIMM()) << 16;
         match.found_table_lis = true;
         continue;
@@ -720,6 +734,8 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
         REXCODEGEN_TRACE("  [0x{:08X}] Found addi for index_reg r{}, swapping table/index", addr,
                          static_cast<u32>(instr.D.RT));
         std::swap(match.table_reg, match.index_reg);
+        if (!match.found_shift)
+          match.emit_index_reg = match.index_reg;
         match.table_low = instr.D.UIMM();
         match.found_table_addi = true;
         continue;
@@ -836,7 +852,7 @@ std::optional<JumpTable> FunctionScanner::detect_jump_table(guest_addr_t bctr_ad
   JumpTable jt;
   jt.bctrAddress = static_cast<uint32_t>(bctr_address);
   jt.tableAddress = static_cast<uint32_t>(table_address);
-  jt.indexRegister = match.index_reg;
+  jt.indexRegister = (match.emit_index_reg != 0xFF) ? match.emit_index_reg : match.index_reg;
   jt.targets = std::move(targets);
 
   return jt;
@@ -1392,7 +1408,15 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
   };
   JumpTableType tableType = JumpTableType::kAbsolute;
   uint8_t indexReg = 0xFF;       // Current reg being traced (0xFF = stop tracing)
-  uint8_t finalIndexReg = 0xFF;  // Last valid indexReg for scanForBounds/output
+  uint8_t finalIndexReg = 0xFF;  // Last valid indexReg for scanForBounds (bound finding)
+  // Register the emitted switch must READ at the bctr. Unlike finalIndexReg,
+  // this must never be retargeted through a plain register copy (mr/addi-0/
+  // rotlwi-0): the copy SOURCE is only guaranteed to equal the index at the
+  // copy site, not at the bctr (e.g. `mr r30,r29` as a loop init -- r30 is the
+  // loop counter, r29 stays 0, and a switch emitted on r29 dispatches every
+  // iteration to case 0). The copy DEST is on the dataflow path into the
+  // dispatch, so it always holds the index value when the bctr executes.
+  uint8_t emitIndexReg = 0xFF;
   int shiftAmount = 0;
 
   // Backward scan from bctr
@@ -1429,6 +1453,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         tableType = JumpTableType::kAbsolute;
         indexReg = insn->X.RB;
         finalIndexReg = indexReg;
+        emitIndexReg = indexReg;
         foundLoad = true;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lwzx at 0x{:08X}", bctrAddr,
                          scanAddr);
@@ -1443,6 +1468,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         }
         indexReg = insn->X.RB;
         finalIndexReg = indexReg;
+        emitIndexReg = indexReg;
         foundLoad = true;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lbzx at 0x{:08X}", bctrAddr,
                          scanAddr);
@@ -1457,6 +1483,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         }
         indexReg = insn->X.RB;
         finalIndexReg = indexReg;
+        emitIndexReg = indexReg;
         foundLoad = true;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lhzx at 0x{:08X}", bctrAddr,
                          scanAddr);
@@ -1547,6 +1574,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
           if (sh > 0 && mb == 0 && me == (31 - sh)) {
             indexReg = insn->M.RS;
             finalIndexReg = indexReg;
+            emitIndexReg = indexReg;  // pre-shift reg holds the unscaled case index at the bctr
             REXCODEGEN_TRACE(
                 "detectJumpTable: bctr=0x{:08X} found slwi at 0x{:08X} indexReg now r{}", bctrAddr,
                 scanAddr, indexReg);
@@ -1557,6 +1585,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
             // on the dest). Trace through the copy so scanForBounds can find the
             // bound -> otherwise the table is under-sized and out-of-range
             // indices hit __builtin_trap(). (No scaling: it's a plain copy.)
+            // emitIndexReg stays on the copy DEST: the source may be stale at
+            // the bctr (e.g. loop-init copy `mr r30,r29`).
             indexReg = insn->M.RS;
             finalIndexReg = indexReg;
             REXCODEGEN_TRACE(
@@ -1574,7 +1604,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
                    (insn->opcode == Opcode::or_ && insn->X.RT == insn->X.RB)) {
           // mr rA,rS  (== or rA,rS,rS): plain register copy. Like the rotlwi-0
           // case, trace through to the source so scanForBounds finds the cmplwi
-          // bound, which is frequently on the pre-copy register.
+          // bound, which is frequently on the pre-copy register. emitIndexReg
+          // stays on the copy DEST (see declaration comment).
           indexReg = insn->X.RT;
           finalIndexReg = indexReg;
           REXCODEGEN_TRACE(
@@ -1582,7 +1613,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
               scanAddr, indexReg);
         } else if (insn->opcode == Opcode::addi && insn->D.d == 0 && insn->D.RA != 0) {
           // addi rA,rS,0: register copy (RA!=0 distinguishes it from `li rA,0`).
-          // Trace through to the source register.
+          // Trace through to the source register (bounds only; emitIndexReg
+          // stays on the copy DEST).
           indexReg = insn->D.RA;
           finalIndexReg = indexReg;
           REXCODEGEN_TRACE(
@@ -1714,7 +1746,11 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
   JumpTable jt;
   jt.bctrAddress = bctrAddr;
   jt.tableAddress = tableAddr;
-  jt.indexRegister = finalIndexReg;
+  // Emit the switch on the register that holds the index AT THE BCTR
+  // (emitIndexReg). finalIndexReg may have been retargeted through plain
+  // register copies purely so scanForBounds could locate the cmplwi bound;
+  // reading that register at runtime is wrong when the copy was a loop init.
+  jt.indexRegister = (emitIndexReg != 0xFF) ? emitIndexReg : finalIndexReg;
 
   REXCODEGEN_TRACE(
       "detectJumpTable: bctr=0x{:08X} reading {} entries from table=0x{:08X} base=0x{:08X} type={}",

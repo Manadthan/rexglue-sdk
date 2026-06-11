@@ -416,8 +416,32 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
       if (is_capturing) {
         ImGui::Button("Press any key...##v", ImVec2(140.0f, 0));
 
+        // Refuse keys already bound to another action (any keybind category)
+        // so two actions can never end up sharing a key via capture. The
+        // rejected key's owner is shown and capture stays active.
+        auto conflicting_bind = [&](const std::string& key_name) -> std::string {
+          for (auto& other : registry) {
+            if (is_keybind_category(other.category) && other.name != entry.name &&
+                other.getter() == key_name) {
+              return other.description.empty() ? other.name : other.description;
+            }
+          }
+          return {};
+        };
+        auto try_assign = [&](const std::string& key_name) {
+          std::string owner = conflicting_bind(key_name);
+          if (!owner.empty()) {
+            capture_conflict_ = "'" + key_name + "' is bound to " + owner;
+            return;
+          }
+          rex::cvar::SetFlagByName(entry.name, key_name);
+          capturing_bind_name_.clear();
+          capture_conflict_.clear();
+        };
+
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
           capturing_bind_name_.clear();
+          capture_conflict_.clear();
         } else {
           for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
             auto imgui_key = static_cast<ImGuiKey>(k);
@@ -427,20 +451,28 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
               auto vk = ImGuiKeyToVirtualKey(imgui_key);
               std::string name = rex::ui::VirtualKeyToString(vk);
               if (!name.empty()) {
-                rex::cvar::SetFlagByName(entry.name, name);
+                try_assign(name);
+              } else {
+                // Unmappable key: cancel capture like before.
+                capturing_bind_name_.clear();
+                capture_conflict_.clear();
               }
-              capturing_bind_name_.clear();
               break;
             }
           }
           for (int mb = 0; mb < 3; ++mb) {
             if (ImGui::IsMouseClicked(mb)) {
               const char* names[] = {"LMB", "RMB", "MMB"};
-              rex::cvar::SetFlagByName(entry.name, names[mb]);
-              capturing_bind_name_.clear();
+              try_assign(names[mb]);
               break;
             }
           }
+        }
+
+        // Own line below the row: the value column sits near the window edge,
+        // so a SameLine message would be clipped.
+        if (!capture_conflict_.empty() && capturing_bind_name_ == entry.name) {
+          ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "    %s", capture_conflict_.c_str());
         }
       } else {
         ImGui::SetNextItemWidth(80.0f);
@@ -448,6 +480,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
         ImGui::SameLine();
         if (ImGui::SmallButton("Rebind##v")) {
           capturing_bind_name_ = entry.name;
+          capture_conflict_.clear();
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset##v")) {

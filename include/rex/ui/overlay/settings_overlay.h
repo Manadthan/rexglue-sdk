@@ -34,6 +34,9 @@ class SettingsDialog : public ImGuiDialog {
   char search_buf_[128] = {};
   std::string selected_category_;
   std::string capturing_bind_name_;
+  // Why the last captured key was rejected (already bound elsewhere); shown
+  // next to the capture button until a free key is pressed or capture ends.
+  std::string capture_conflict_;
 };
 
 }  // namespace rex::ui

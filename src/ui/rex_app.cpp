@@ -209,9 +209,11 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
       input_sys->SetActiveCallback([this]() {
-        if (!debug_overlay_ && !console_overlay_ && !settings_overlay_)
+        if (!imgui_drawer_->HasDialogs()) {
           return true;
-        return !imgui_drawer_->GetIO().WantCaptureMouse;
+        }
+        const auto& io = imgui_drawer_->GetIO();
+        return !io.WantCaptureMouse && !io.WantCaptureKeyboard;
       });
     }
   }

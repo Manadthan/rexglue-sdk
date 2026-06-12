@@ -262,8 +262,8 @@ static bool isCrOnlyStatement(std::string_view line) {
   auto eq = line.find('=');
   if (line.find(".compare") != std::string_view::npos)
     return true;
-  return eq != std::string_view::npos && eq > 0 && line[eq - 1] == ' ' &&
-         eq + 1 < line.size() && line[eq + 1] == ' ';
+  return eq != std::string_view::npos && eq > 0 && line[eq - 1] == ' ' && eq + 1 < line.size() &&
+         line[eq + 1] == ' ';
 }
 
 bool BuilderContext::needs_progress_guard(uint32_t target) const {

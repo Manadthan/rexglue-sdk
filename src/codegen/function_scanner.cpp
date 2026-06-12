@@ -987,6 +987,27 @@ FunctionBlocks FunctionScanner::discover_blocks(rex::guest_addr_t entry_point,
       continue;
     }
 
+    // Check for conditional bctr (bnectr etc.) - branches to CTR if the
+    // condition is met, otherwise falls through (e.g. the CRT setjmp/override
+    // dispatch thunk). Never a jump table; treat like a conditional return.
+    if (instr.opcode == Opcode::bcctr && instr.is_conditional()) {
+      guest_addr_t fall_through = addr + 4;
+      block.successors.push_back(fall_through);
+      block.has_terminator = true;
+      result.blocks.push_back(block);
+      block_stack.pop_back();  // Pop current block BEFORE pushing fall-through
+
+      // Push fall-through block onto stack
+      if (!scannedAddrs.count(fall_through)) {
+        DiscoveredBlock ft_block;
+        ft_block.base = fall_through;
+        ft_block.end = fall_through;
+        ft_block.projectedSize = -1;
+        block_stack.push_back(ft_block);
+      }
+      continue;
+    }
+
     // Check for bctr (indirect branch)
     if (instr.opcode == Opcode::bcctr) {
       auto jt_info = detect_jump_table(addr);
@@ -1964,7 +1985,11 @@ BlockDiscoveryResult discoverBlocks(
           // blr - end of function path
           block.size = addr - blockStart + 4;
           break;
-        } else if (insn->opcode == rex::codegen::ppc::Opcode::bcctr) {
+        } else if (insn->opcode == rex::codegen::ppc::Opcode::bcctr && !isConditional(*insn)) {
+          // Conditional bcctr (bnectr etc.) falls through when the condition
+          // fails - e.g. the CRT setjmp/override dispatch thunk - so it is
+          // routed to the conditional-branch arm below instead, which queues
+          // the fall-through block.
           // bctr - try to detect jump table
           REXCODEGEN_TRACE("discoverBlocks: bctr at 0x{:08X} in func 0x{:08X}, funcEnd=0x{:08X}",
                            addr, entryPoint, funcEnd);

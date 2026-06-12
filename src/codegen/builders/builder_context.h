@@ -236,6 +236,22 @@ struct BuilderContext {
   void emit_conditional_branch(bool not_, std::string_view cond);
 
   /**
+   * @brief Check whether a backward branch needs a forward-progress guard.
+   * @param target Branch target address (must be an internal label)
+   * @return true if the emitted loop body has no compiler-visible side effects
+   *
+   * Guest "park" loops that spin on registers only (e.g. cmpwi + beq back to
+   * the cmpwi, with no memory access) recompile to a side-effect-free infinite
+   * loop, which is UB under the C++ forward-progress rule -- clang deletes the
+   * loop and the function falls through instead of parking. Scans the body
+   * emitted so far between the target label and the current point for opaque
+   * operations (volatile REX_LOAD/REX_STORE, function calls, fences, ...);
+   * if none are found the branch site must emit REX_LOOP_GUARD() so the loop
+   * has an observable side effect.
+   */
+  bool needs_progress_guard(uint32_t target) const;
+
+  /**
    * @brief Emit CSR flush mode change if needed.
    * @param enable true for VMX mode (flush-to-zero), false for FPU mode
    */

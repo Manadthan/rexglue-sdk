@@ -248,6 +248,84 @@ void BuilderContext::emit_function_call(uint32_t address) {
   println("\tREX_FATAL(\"Unresolved call from 0x{:08X} to 0x{:08X}\");", base, address);
 }
 
+/// True if `line` (trimmed) is an assignment whose destination is a condition
+/// register field ("cr6 = ...", "ctx.cr6.eq = ...") or a CR compare statement
+/// ("cr6.compare<...>(...)"). CR-only writes cannot make a loop progress
+/// toward termination on their own when nothing feeding them changes.
+static bool isCrOnlyStatement(std::string_view line) {
+  if (line.rfind("ctx.", 0) == 0)
+    line.remove_prefix(4);
+  if (!(line.rfind("cr", 0) == 0 && line.size() > 2 && line[2] >= '0' && line[2] <= '7'))
+    return false;
+  // "crN.compare<...>" / "crN = ..." / "crN.eq = ..." - reject anything where
+  // the first '=' belongs to a comparison/compound operator.
+  auto eq = line.find('=');
+  if (line.find(".compare") != std::string_view::npos)
+    return true;
+  return eq != std::string_view::npos && eq > 0 && line[eq - 1] == ' ' &&
+         eq + 1 < line.size() && line[eq + 1] == ' ';
+}
+
+bool BuilderContext::needs_progress_guard(uint32_t target) const {
+  if (target > base)
+    return false;  // Forward branch - cannot close a loop by itself
+
+  // Blocks are emitted in address order, so a backward target's label is
+  // already in the body. Find the label line (must start a line, so a
+  // "goto loc_X;" reference does not match).
+  auto label = fmt::format("loc_{:X}:", target);
+  size_t pos = out.rfind(label);
+  while (pos != std::string::npos && pos != 0 && out[pos - 1] != '\n')
+    pos = pos == 0 ? std::string::npos : out.rfind(label, pos - 1);
+
+  if (pos == std::string::npos) {
+    // Label not emitted yet (unusual block ordering) - the loop body can't be
+    // inspected, so guard: a spurious yield is harmless, a deleted park loop
+    // is not.
+    REXCODEGEN_TRACE("Backward branch 0x{:08X} -> 0x{:08X}: label not found, guarding", base,
+                     target);
+    return true;
+  }
+
+  // A loop only needs the guard when its body can NEVER make progress: no
+  // register state changes between iterations (only condition-register fields
+  // recomputed from unchanging inputs), no calls, no memory access. Such
+  // loops are guest "park" spins (e.g. cmpwi + beq back to the cmpwi) that
+  // recompile to side-effect-free infinite loops, which clang deletes under
+  // the C++ forward-progress rule. Anything else - a GPR/FPR/CTR write means
+  // the loop works toward its exit condition; a call/volatile access is an
+  // observable side effect - and the loop is left untouched, so real compute
+  // loops never pay for a yield.
+  //
+  // Classified on the emitted C++ (whitelist): comments, labels, control flow
+  // and CR-only writes are inert; any line that isn't positively inert means
+  // no guard. Conditional sub-paths ("if (...) { call; }") are skipped as
+  // control flow: if the looping path never takes them, the spin is still
+  // side-effect-free, so the guard stays (harmless if the path is taken).
+  auto bodyView = std::string_view(out).substr(pos + label.size());
+  while (!bodyView.empty()) {
+    auto nl = bodyView.find('\n');
+    auto line = bodyView.substr(0, nl);
+    bodyView.remove_prefix(nl == std::string_view::npos ? bodyView.size() : nl + 1);
+
+    // Trim leading whitespace
+    auto start = line.find_first_not_of(" \t");
+    if (start == std::string_view::npos)
+      continue;
+    line.remove_prefix(start);
+
+    if (line.rfind("//", 0) == 0 || line.rfind("if (", 0) == 0 || line.rfind("goto ", 0) == 0 ||
+        line.rfind("return", 0) == 0 || line.rfind("loc_", 0) == 0 || line[0] == '{' ||
+        line[0] == '}')
+      continue;
+    if (isCrOnlyStatement(line))
+      continue;
+
+    return false;  // Register write, call, memory access, or unknown statement
+  }
+  return true;
+}
+
 void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
   uint32_t target = insn.operands[1];
 
@@ -258,8 +336,13 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
   switch (kind) {
     case TargetKind::InternalLabel:
       // Target is within this function - local goto
-      println("\tif ({}{}.{}) goto loc_{:08X};", not_ ? "!" : "", cr(insn.operands[0]), cond,
-              target);
+      if (needs_progress_guard(target)) {
+        println("\tif ({}{}.{}) {{ REX_LOOP_GUARD(); goto loc_{:08X}; }}", not_ ? "!" : "",
+                cr(insn.operands[0]), cond, target);
+      } else {
+        println("\tif ({}{}.{}) goto loc_{:08X};", not_ ? "!" : "", cr(insn.operands[0]), cond,
+                target);
+      }
       break;
 
     case TargetKind::Function:

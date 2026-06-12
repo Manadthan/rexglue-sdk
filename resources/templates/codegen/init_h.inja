@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 
 //=============================================================================
@@ -97,6 +98,19 @@ extern PPCFuncMapping PPCFuncMappings[];
 #define REX_FUNC_PROLOGUE() ((void)0)
 #endif
 #endif
+
+//=============================================================================
+// Park-Loop Progress Guard
+//=============================================================================
+
+// Emitted by codegen on backward branches whose loop body has no
+// compiler-visible side effects (guest register-only "park" loops, e.g.
+// cmpwi + beq back to the cmpwi). Without it the recompiled loop is infinite
+// and side-effect-free, which is UB under the C++ forward-progress rule:
+// clang deletes the loop and the function falls through instead of parking.
+// yield() is an opaque call (observable side effect) and keeps a parked
+// guest thread from burning a host core.
+#define REX_LOOP_GUARD() std::this_thread::yield()
 
 //=============================================================================
 // Memory Access

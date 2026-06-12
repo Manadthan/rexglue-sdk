@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 
 
@@ -59,6 +60,10 @@
   __attribute__((alias("__imp__" #name))) REX_WEAK_FUNC(name); \
   REX_EXTERN(__imp__##name)
 #endif
+
+// Park-loop progress guard (same as codegen init header): opaque side effect
+// emitted into side-effect-free backward loops so clang can't UB-delete them
+#define REX_LOOP_GUARD() std::this_thread::yield()
 
 #if REX_PLATFORM_WIN32
 #define REX_PHYS_HOST_OFFSET(addr) (((u32)(addr) >= 0xE0000000u) ? 0x1000u : 0u)

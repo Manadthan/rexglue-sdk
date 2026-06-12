@@ -62,6 +62,37 @@ bool IsRasterizationPotentiallyDone(const RegisterFile& regs, bool primitive_pol
       return false;
     }
   }
+  // If depth and stencil have no observable effect, and no color render target
+  // component can be written (due to the EDRAM mode or the write masks), the
+  // draw is observable only through sample counting, which is assumed to be a
+  // part of depth / stencil (see above). The callers preserve vertex shader
+  // memory export for rasterization-disabled draws; a pixel shader performing
+  // only memory export in such a draw will be dropped, though. Going through
+  // the rasterization-disabled path here also keeps the geometry shader +
+  // pixel shader + zero-write-mask render target combination that 58410847
+  // uses for a no-op point-list draw from ever reaching pipeline creation -
+  // vkd3d-proton on RADV never returns from vkCreateGraphicsPipelines for it.
+  reg::RB_DEPTHCONTROL normalized_depth_control = GetNormalizedDepthControl(regs);
+  if (!normalized_depth_control.z_enable && !normalized_depth_control.stencil_enable) {
+    bool any_color_component_written = false;
+    if (edram_mode == xenos::EdramMode::kColorDepth) {
+      uint32_t rb_color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
+      for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+        uint32_t format_component_mask =
+            (uint32_t(1) << xenos::GetColorRenderTargetFormatComponentCount(
+                 regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i])
+                     .color_format)) -
+            1;
+        if ((rb_color_mask >> (4 * i)) & format_component_mask) {
+          any_color_component_written = true;
+          break;
+        }
+      }
+    }
+    if (!any_color_component_written) {
+      return false;
+    }
+  }
   return true;
 }
 

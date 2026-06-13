@@ -1553,7 +1553,19 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
     // DON'T trace back through extrwi/other rlwinm variants - those transform the value
     // NOTE: SH must be > 0 for a real shift; SH=0 is just a move/no-op (clrlwi r,r,0)
     // IMPORTANT: Stop tracing if another instruction writes to indexReg (breaks the chain)
-    if (foundLoad && indexReg != 0xFF) {
+    //
+    // Also stop once the table address is fully resolved. In backward order the
+    // dispatch's own index scaling (slwi) and register copies always sit between
+    // the indexed load and the table-address lis/addi, so by the time tableAddr
+    // is complete the legitimate index chain has already been traced. Any later
+    // (further-back) write to the index register belongs to unrelated code in the
+    // scan window; retargeting through it hands scanForBounds the wrong register,
+    // which then false-matches an unrelated cmpli and UNDER-SIZES the table (e.g.
+    // the SOTN equip dispatch traced r11 -> r30 and sized 17 entries vs the real
+    // 82, dropping case bodies that then FATAL at runtime).
+    bool tableFullyResolved =
+        tableAddr != 0 && (tableType == JumpTableType::kAbsolute || baseAddr != 0);
+    if (foundLoad && indexReg != 0xFF && !tableFullyResolved) {
       // Check if this instruction writes to indexReg
       bool writesToIndexReg = false;
       uint8_t destReg = 0xFF;

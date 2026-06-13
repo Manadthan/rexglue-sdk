@@ -26,6 +26,7 @@
 #include <WS2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <sys/socket.h>
@@ -111,6 +112,39 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
   int ret = bind(native_handle_, (sockaddr*)name, name_len);
+
+#if !REX_PLATFORM_WIN32
+  // On Linux/macOS, binding to a privileged port (<1024) requires elevated
+  // privileges and fails with EACCES, whereas Xbox/Windows winsock binds it
+  // freely. Titles (e.g. RakNet-based netcode) bind fixed low ports; a failed
+  // bind leaves the socket unbound and the title's network state machine hangs
+  // forever waiting to receive. Retry on an ephemeral port so the bind
+  // succeeds - no traffic depends on the exact host port for single-player.
+  // NOTE: N_XSOCKADDR_IN::sin_port already reads back in host byte order, so
+  // do NOT ntohs() it here.
+  if (ret < 0) {
+    uint16_t host_port = name->sin_port;
+    if (host_port != 0 && host_port < 1024) {
+      sockaddr_in retry{};
+      std::memcpy(&retry, name, sizeof(retry));  // preserve family + address
+      retry.sin_port = 0;                         // kernel-assigned ephemeral
+      ret = bind(native_handle_, (sockaddr*)&retry, sizeof(retry));
+      if (ret == 0) {
+        // The title polls this socket and relies on the recv returning when no
+        // peer answers (its own no-peer timeout then advances boot). On a
+        // blocking socket that recv never returns and the title hangs, so make
+        // the socket non-blocking. (Titles set non-blocking via a Winsock
+        // FIONBIO ioctl whose code differs from POSIX; some never set it at all
+        // and depend on Windows recv semantics.)
+        int flags = fcntl(native_handle_, F_GETFL, 0);
+        if (flags >= 0) {
+          fcntl(native_handle_, F_SETFL, flags | O_NONBLOCK);
+        }
+      }
+    }
+  }
+#endif
+
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }

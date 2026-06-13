@@ -59,15 +59,16 @@ std::string FlagNameToEnvVar(std::string_view name) {
 std::string_view TrimWS(std::string_view s) {
   constexpr const char* kWs = " \t\r\n";
   size_t b = s.find_first_not_of(kWs);
-  if (b == std::string_view::npos) return {};
+  if (b == std::string_view::npos)
+    return {};
   size_t e = s.find_last_not_of(kWs);
   return s.substr(b, e - b + 1);
 }
 
 // Strip one layer of matching surrounding quotes (tolerate legacy quoted values).
 std::string_view Unquote(std::string_view v) {
-  if (v.size() >= 2 && ((v.front() == '"' && v.back() == '"') ||
-                        (v.front() == '\'' && v.back() == '\''))) {
+  if (v.size() >= 2 &&
+      ((v.front() == '"' && v.back() == '"') || (v.front() == '\'' && v.back() == '\''))) {
     return v.substr(1, v.size() - 2);
   }
   return v;
@@ -490,17 +491,21 @@ void LoadConfig(const std::filesystem::path& config_path) {
   int applied = 0;
   while (std::getline(file, line)) {
     std::string_view sv = TrimWS(line);
-    if (sv.empty() || sv.front() == '#' || sv.front() == ';') continue;
+    if (sv.empty() || sv.front() == '#' || sv.front() == ';')
+      continue;
     if (sv.front() == '[') {  // section header: cvars are top-level only
       in_section = true;
       continue;
     }
-    if (in_section) continue;
+    if (in_section)
+      continue;
     size_t eq = sv.find('=');
-    if (eq == std::string_view::npos) continue;
+    if (eq == std::string_view::npos)
+      continue;
     std::string_view key = TrimWS(sv.substr(0, eq));
     std::string_view value = Unquote(TrimWS(sv.substr(eq + 1)));
-    if (key.empty()) continue;
+    if (key.empty())
+      continue;
     if (SetFlagByName(key, value)) {
       ++applied;
     } else {

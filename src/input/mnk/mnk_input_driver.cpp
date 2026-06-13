@@ -26,7 +26,8 @@
 #include <Windows.h>
 #endif
 
-REXCVAR_DEFINE_BOOL(mnk_mode, true, "Input", "Enable keyboard/mouse controller emulation (on by default)");
+REXCVAR_DEFINE_BOOL(mnk_mode, true, "Input",
+                    "Enable keyboard/mouse controller emulation (on by default)");
 REXCVAR_DEFINE_INT32(mnk_user_index, 0, "Input", "Controller slot (0-3) for MnK").range(0, 3);
 REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
     .range(0.01, 10.0);

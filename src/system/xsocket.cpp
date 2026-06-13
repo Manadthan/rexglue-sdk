@@ -127,7 +127,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
     if (host_port != 0 && host_port < 1024) {
       sockaddr_in retry{};
       std::memcpy(&retry, name, sizeof(retry));  // preserve family + address
-      retry.sin_port = 0;                         // kernel-assigned ephemeral
+      retry.sin_port = 0;                        // kernel-assigned ephemeral
       ret = bind(native_handle_, (sockaddr*)&retry, sizeof(retry));
       if (ret == 0) {
         // The title polls this socket and relies on the recv returning when no

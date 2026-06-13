@@ -557,7 +557,8 @@ std::map<std::string, std::string> ParseCategoryLevelsFromConfig(
       continue;
     if (sv.front() == '[') {
       size_t close = sv.find(']');
-      std::string_view sec = trim(sv.substr(1, close == std::string_view::npos ? sv.size() - 1 : close - 1));
+      std::string_view sec =
+          trim(sv.substr(1, close == std::string_view::npos ? sv.size() - 1 : close - 1));
       in_levels = (sec == "log.levels" || sec == "log_levels");
       continue;
     }

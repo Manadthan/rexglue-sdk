@@ -351,11 +351,11 @@ bool ReXApp::SetupPresentation() {
           std::string console_key = rex::cvar::Query<std::string>("bind_console");
           if (console_key == "Backtick")
             console_key = "`";
-          ui::ToastDialog::Show(imgui_drawer_.get(),
-                                fmt::format("{} - Settings  |  {} - Fullscreen  |  {} - Debug Console",
-                                            rex::cvar::Query<std::string>("bind_settings"),
-                                            rex::cvar::Query<std::string>("bind_fullscreen"),
-                                            console_key));
+          ui::ToastDialog::Show(
+              imgui_drawer_.get(),
+              fmt::format("{} - Settings  |  {} - Fullscreen  |  {} - Debug Console",
+                          rex::cvar::Query<std::string>("bind_settings"),
+                          rex::cvar::Query<std::string>("bind_fullscreen"), console_key));
         }
 
         OnCreateDialogs(imgui_drawer_.get());

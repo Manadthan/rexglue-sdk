@@ -280,8 +280,10 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   // on-screen even when overlay_scale is cranked up on a small display.
   const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
   ImVec2 want(620.0f * scale, 480.0f * scale);
-  if (want.x > work_size.x * 0.95f) want.x = work_size.x * 0.95f;
-  if (want.y > work_size.y * 0.95f) want.y = work_size.y * 0.95f;
+  if (want.x > work_size.x * 0.95f)
+    want.x = work_size.x * 0.95f;
+  if (want.y > work_size.y * 0.95f)
+    want.y = work_size.y * 0.95f;
   ImGui::SetNextWindowSize(want, ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSizeConstraints(ImVec2(320.0f, 240.0f), work_size);
   ImGui::SetNextWindowBgAlpha(0.85f);

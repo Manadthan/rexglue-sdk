@@ -11,6 +11,7 @@
  */
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/cvar.h>
+#include <rex/string.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/window.h>
 #include <imgui.h>
@@ -611,8 +612,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
         }
       } else {
         char buf[256];
-        std::strncpy(buf, current_val.c_str(), sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
+        rex::string::copy_truncating(buf, current_val, sizeof(buf));
         if (ImGui::InputText("##v", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
           rex::cvar::SetFlagByName(entry.name, buf);
         }

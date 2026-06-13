@@ -14,7 +14,6 @@
 #include "template_utils.h"
 
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -62,17 +61,7 @@ bool ApplyEntry(const OverwriteEntry& entry) {
           return false;
         }
       }
-      std::ofstream out(entry.path);
-      if (!out) {
-        REXLOG_ERROR("Failed to open for write: {}", entry.path.string());
-        return false;
-      }
-      out << entry.rendered_content;
-      if (!out.good()) {
-        REXLOG_ERROR("Failed to write: {}", entry.path.string());
-        return false;
-      }
-      return true;
+      return write_file_atomic(entry.path, entry.rendered_content);
     }
     case OverwriteAction::Delete:
       if (!fs::exists(entry.path))
@@ -302,7 +291,7 @@ Result<void> CodegenFromConfig(const std::string& config_path, const CliContext&
 
   fs::path manifest_path;
   ManifestSummary summary;
-  const std::string current_version = REXGLUE_VERSION_NUMERIC;
+  const std::string current_version = REXGLUE_VERSION_FLOOR;
 
   auto append_findings = [&](MigrationFindings findings) {
     post_plan.insert(post_plan.end(), std::make_move_iterator(findings.rewrites.begin()),

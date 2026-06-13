@@ -17,7 +17,6 @@ set(REXSYSTEM_SOURCES
     xsymboliclink.cpp
     xobject.cpp
     xmodule.cpp
-    shared_library.cpp
     guest_path.cpp
 
     # Utilities
@@ -85,6 +84,7 @@ endif()
 
 if(WIN32)
     target_link_libraries(rexruntime PRIVATE ws2_32)
+    target_compile_definitions(rexruntime PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 if(REXGLUE_USE_D3D12)

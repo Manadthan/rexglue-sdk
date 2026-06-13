@@ -1414,4 +1414,9 @@ static void signal_handler(int signal, siginfo_t* /*info*/, void* /*context*/) {
   }
 }
 
+// macOS has no equivalent of the Windows multimedia timer-resolution API
+// (timeBeginPeriod); the Mach scheduler already provides high-resolution
+// timing. No-op, matching the POSIX backend.
+void EnableHighResolutionTiming() {}
+
 }  // namespace rex::thread

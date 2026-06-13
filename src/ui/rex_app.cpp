@@ -347,11 +347,15 @@ bool ReXApp::SetupPresentation() {
         });
 
         if (REXCVAR_GET(show_startup_hints)) {
+          // The backtick key name isn't obvious to everyone; show the glyph as the key token.
+          std::string console_key = rex::cvar::Query<std::string>("bind_console");
+          if (console_key == "Backtick")
+            console_key = "`";
           ui::ToastDialog::Show(imgui_drawer_.get(),
-                                fmt::format("{}  Settings      {}  Fullscreen      {}  Console",
+                                fmt::format("{} - Settings  |  {} - Fullscreen  |  {} - Debug Console",
                                             rex::cvar::Query<std::string>("bind_settings"),
                                             rex::cvar::Query<std::string>("bind_fullscreen"),
-                                            rex::cvar::Query<std::string>("bind_console")));
+                                            console_key));
         }
 
         OnCreateDialogs(imgui_drawer_.get());

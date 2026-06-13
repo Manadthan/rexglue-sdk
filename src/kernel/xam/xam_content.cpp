@@ -21,7 +21,10 @@
 #include <rex/system/xenumerator.h>
 #include <rex/system/xtypes.h>
 
-REXCVAR_DEFINE_UINT32(license_mask, 0, "Kernel", "Set license mask for activated content");
+REXCVAR_DEFINE_UINT32(license_mask, 1, "Kernel",
+                      "License mask for activated content (default 1 = all content licensed, "
+                      "the right stance for self-contained recomps; override per-game if a title "
+                      "needs specific bits)");
 
 namespace rex {
 namespace kernel {

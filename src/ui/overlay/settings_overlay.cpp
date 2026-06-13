@@ -22,6 +22,12 @@
 #include <string>
 #include <vector>
 
+// Scales the settings overlay's font AND fixed layout dimensions together, so it
+// stays readable/navigable on HiDPI displays (the base ImGui font is only 10px).
+REXCVAR_DEFINE_DOUBLE(overlay_scale, 1.5, "UI/Window",
+                      "Settings overlay UI scale (font + layout); raise on HiDPI displays")
+    .range(0.5, 4.0);
+
 namespace rex::ui {
 
 SettingsDialog::SettingsDialog(ImGuiDrawer* imgui_drawer, std::filesystem::path config_path)
@@ -268,12 +274,14 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   const std::string search(search_buf_);
   const bool searching = !search.empty();
 
-  ImGui::SetNextWindowSize(ImVec2(620, 480), ImGuiCond_FirstUseEver);
+  const float scale = static_cast<float>(REXCVAR_GET(overlay_scale));
+  ImGui::SetNextWindowSize(ImVec2(620.0f * scale, 480.0f * scale), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowBgAlpha(0.85f);
   if (!ImGui::Begin("Settings##rex", nullptr, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     return;
   }
+  ImGui::SetWindowFontScale(scale);
 
   // Search bar at the top (full width).
   ImGui::SetNextItemWidth(-1.0f);
@@ -283,8 +291,8 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
 
   ImGui::Separator();
 
-  const float panel_width = 160.0f;
-  ImGui::BeginChild("##cats", ImVec2(panel_width, -30.0f), true);
+  const float panel_width = 160.0f * scale;
+  ImGui::BeginChild("##cats", ImVec2(panel_width, -30.0f * scale), true);
 
   // Recursive lambda to draw the category tree.
   std::function<void(const std::map<std::string, CatNode>&, int)> draw_tree;
@@ -358,7 +366,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
            (cat.size() > 15 && cat.compare(0, 15, "Input/Keybinds/") == 0);
   };
 
-  ImGui::BeginChild("##cvars", ImVec2(0, -30.0f), false);
+  ImGui::BeginChild("##cvars", ImVec2(0, -30.0f * scale), false);
 
   // Pinned quick-access section in the default (root) view.
   if (!searching && selected_category_.empty()) {

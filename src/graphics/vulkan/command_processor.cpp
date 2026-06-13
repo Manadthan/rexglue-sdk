@@ -51,6 +51,14 @@ REXCVAR_DEFINE_BOOL(vulkan_readback_resolve, false, "GPU/Vulkan",
                     "Read render-to-texture results on the CPU")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_INT32(
+    vulkan_skip_domain_shader_draws, -1, "GPU/Vulkan",
+    "Skip quad/triangle domain (tessellation) draws, which wedge the GFX ring on the "
+    "Steam Deck APU (RADV Van Gogh/Sephiroth) regardless of tessellation factor. "
+    "-1 = auto (skip only on the affected Steam Deck APUs), 0 = never, 1 = always.")
+    .range(-1, 1)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(vulkan_readback_memexport, false, "GPU/Vulkan",
                     "Read data written by memory export in shaders on the CPU")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
@@ -792,6 +800,25 @@ bool VulkanCommandProcessor::SetupContext() {
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   const ui::vulkan::VulkanDevice::Properties& device_properties = vulkan_device->properties();
+
+  // Decide whether to skip domain (tessellation) draws. The Steam Deck APU hangs
+  // the GFX ring when RADV executes these draws (independent of tessellation
+  // factor); detect it by the RADV marketing name, which embeds the APU codename
+  // ("AMD Radeon Graphics (RADV VANGOGH)" / "(RADV SEPHIROTH)"). This excludes
+  // desktop RADV GPUs, which tessellate fine.
+  {
+    const int32_t skip_mode = REXCVAR_GET(vulkan_skip_domain_shader_draws);
+    const std::string_view device_name(device_properties.deviceName);
+    const bool is_steam_deck_apu = device_name.find("VANGOGH") != std::string_view::npos ||
+                                   device_name.find("SEPHIROTH") != std::string_view::npos;
+    skip_domain_shader_draws_ = (skip_mode == 1) || (skip_mode < 0 && is_steam_deck_apu);
+    if (skip_domain_shader_draws_) {
+      REXGPU_INFO(
+          "Skipping domain (tessellation) draws on \"{}\" (Steam Deck GFX-ring hang "
+          "workaround; vulkan_skip_domain_shader_draws={}).",
+          device_properties.deviceName, skip_mode);
+    }
+  }
 
   // The unconditional inclusion of the vertex shader stage also covers the case
   // of manual index / factor buffer fetch (the system constants and the shared
@@ -4128,10 +4155,23 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
       render_target_cache_->last_update_render_pass(),
       render_target_cache_->last_update_framebuffer());
 
+  // The Steam Deck APU (RADV "Van Gogh"/"Sephiroth") wedges the GFX ring when it
+  // executes quad/triangle domain (tessellation) draws, regardless of how small
+  // the tessellation factor is - a RADV/SPIR-V translation issue specific to that
+  // APU rather than runaway geometry. Skip those draws on the affected devices
+  // (see skip_domain_shader_draws_ in SetupContext); the only affected guest title
+  // emits a couple of trivial single-quad patches per frame, so nothing visible is
+  // lost. Other devices keep drawing tessellation normally.
+  const bool skip_domain_draw =
+      skip_domain_shader_draws_ &&
+      Shader::IsHostVertexShaderTypeDomain(primitive_processing_result.host_vertex_shader_type);
+
   // Draw.
-  if (primitive_processing_result.index_buffer_type ==
-          PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
-      shader_32bit_index_dma) {
+  if (skip_domain_draw) {
+    // Intentionally skipped (Steam Deck tessellation GFX-ring hang workaround).
+  } else if (primitive_processing_result.index_buffer_type ==
+                 PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
+             shader_32bit_index_dma) {
     deferred_command_buffer_.CmdVkDraw(primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
   } else {
     std::pair<VkBuffer, VkDeviceSize> index_buffer;

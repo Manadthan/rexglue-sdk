@@ -524,6 +524,11 @@ class VulkanCommandProcessor : public CommandProcessor {
   VkPipelineStageFlags guest_shader_pipeline_stages_ = 0;
   VkShaderStageFlags guest_shader_vertex_stages_ = 0;
 
+  // Skip domain (tessellation) draws as a Steam Deck GFX-ring hang workaround.
+  // Determined once in SetupContext() from vulkan_skip_domain_shader_draws and the
+  // detected device; see the comment there.
+  bool skip_domain_shader_draws_ = false;
+
   std::vector<VkFence> fences_free_;
   std::vector<VkSemaphore> semaphores_free_;
 

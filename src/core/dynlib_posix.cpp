@@ -30,6 +30,16 @@ bool DynamicLibrary::Load(const std::filesystem::path& path) {
   return handle_ != nullptr;
 }
 
+bool DynamicLibrary::LoadIfPresent(const std::filesystem::path& path) {
+  Close();
+  // RTLD_NOLOAD: return a handle only if the library is already resident in the
+  // process (and bump its refcount so Close() stays balanced); never load it
+  // fresh. Without this, dlopen would load a system-installed librenderdoc.so
+  // and activate RenderDoc (and its capture overlay) even when not debugging.
+  handle_ = dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+  return handle_ != nullptr;
+}
+
 void DynamicLibrary::Close() {
   if (handle_) {
     dlclose(handle_);

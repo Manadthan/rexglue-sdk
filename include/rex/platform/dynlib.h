@@ -22,6 +22,10 @@ class DynamicLibrary {
   DynamicLibrary& operator=(DynamicLibrary&& other) noexcept;
 
   bool Load(const std::filesystem::path& path);
+  // Attach to the library ONLY if it is already loaded in the process; never
+  // load it fresh. Used to detect an external injector (e.g. RenderDoc) without
+  // accidentally activating it. Returns false if the library isn't present.
+  bool LoadIfPresent(const std::filesystem::path& path);
   void Close();
   explicit operator bool() const { return handle_ != nullptr; }
 

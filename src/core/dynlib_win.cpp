@@ -30,6 +30,18 @@ bool DynamicLibrary::Load(const std::filesystem::path& path) {
   return handle_ != nullptr;
 }
 
+bool DynamicLibrary::LoadIfPresent(const std::filesystem::path& path) {
+  Close();
+  // Attach only if the module is already loaded in the process; do not load it
+  // fresh. dwFlags=0 increments the refcount so Close()'s FreeLibrary balances.
+  HMODULE existing = nullptr;
+  if (!GetModuleHandleExW(0, path.c_str(), &existing) || !existing) {
+    return false;
+  }
+  handle_ = static_cast<void*>(existing);
+  return true;
+}
+
 void DynamicLibrary::Close() {
   if (handle_) {
     FreeLibrary(static_cast<HMODULE>(handle_));

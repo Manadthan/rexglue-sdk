@@ -20,10 +20,12 @@ std::unique_ptr<RenderDocAPI> RenderDocAPI::CreateIfConnected() {
 
   pRENDERDOC_GetAPI get_api = nullptr;
 
-  // Try to load the RenderDoc library. If RenderDoc is attached, the library
-  // should already be loaded into the process and this will increment the
-  // reference count. If not attached, the load will fail and we return nullptr.
-  if (!renderdoc_api->library_.Load(platform::lib_names::kRenderDoc)) {
+  // Attach to RenderDoc ONLY if it is already injected into the process. Use
+  // LoadIfPresent (RTLD_NOLOAD / GetModuleHandleEx) rather than Load: a plain
+  // dlopen would load a system-installed librenderdoc.so on Linux (e.g. the
+  // Steam Deck) and activate RenderDoc + its capture overlay even when we're
+  // not debugging. If RenderDoc isn't already present, bail out.
+  if (!renderdoc_api->library_.LoadIfPresent(platform::lib_names::kRenderDoc)) {
     return nullptr;
   }
   get_api = renderdoc_api->library_.GetSymbol<pRENDERDOC_GetAPI>("RENDERDOC_GetAPI");

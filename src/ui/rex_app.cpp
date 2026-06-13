@@ -113,7 +113,7 @@ bool ReXApp::SetupEnvironment() {
   }
 
   PathConfig path_config{game_dir, user_dir, update_dir, cache_dir,
-                         exe_dir / (std::string(GetName()) + ".toml")};
+                         exe_dir / (std::string(GetName()) + ".ini")};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;

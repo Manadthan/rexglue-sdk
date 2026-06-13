@@ -13,14 +13,14 @@
 #include <cctype>
 #include <charconv>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
-
-#include <toml++/toml.hpp>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -535,20 +535,44 @@ std::map<std::string, std::string> ParseCategoryLevelsFromConfig(
   if (!std::filesystem::exists(config_path))
     return result;
 
-  try {
-    auto config = toml::parse_file(config_path.string());
-    auto* log_table = config["log"].as_table();
-    if (!log_table)
-      return result;
-    auto* levels_table = (*log_table)["levels"].as_table();
-    if (!levels_table)
-      return result;
+  std::ifstream file(config_path);
+  if (!file)
+    return result;
 
-    for (const auto& [key, value] : *levels_table) {
-      if (value.is_string())
-        result[std::string(key)] = value.as_string()->get();
+  auto trim = [](std::string_view s) -> std::string_view {
+    constexpr const char* kWs = " \t\r\n";
+    size_t b = s.find_first_not_of(kWs);
+    if (b == std::string_view::npos)
+      return {};
+    size_t e = s.find_last_not_of(kWs);
+    return s.substr(b, e - b + 1);
+  };
+
+  // INI: collect `category = level` pairs under the `[log.levels]` section.
+  std::string line;
+  bool in_levels = false;
+  while (std::getline(file, line)) {
+    std::string_view sv = trim(line);
+    if (sv.empty() || sv.front() == '#' || sv.front() == ';')
+      continue;
+    if (sv.front() == '[') {
+      size_t close = sv.find(']');
+      std::string_view sec = trim(sv.substr(1, close == std::string_view::npos ? sv.size() - 1 : close - 1));
+      in_levels = (sec == "log.levels" || sec == "log_levels");
+      continue;
     }
-  } catch (const toml::parse_error&) {}
+    if (!in_levels)
+      continue;
+    size_t eq = sv.find('=');
+    if (eq == std::string_view::npos)
+      continue;
+    std::string_view key = trim(sv.substr(0, eq));
+    std::string_view val = trim(sv.substr(eq + 1));
+    if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+      val = val.substr(1, val.size() - 2);
+    if (!key.empty())
+      result[std::string(key)] = std::string(val);
+  }
 
   return result;
 }

@@ -20,8 +20,6 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
-#include <toml++/toml.hpp>
-
 namespace rex::cvar {
 
 namespace {
@@ -57,35 +55,22 @@ std::string FlagNameToEnvVar(std::string_view name) {
   return result;
 }
 
-// Recursively apply TOML values
-void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
-  for (const auto& [key, value] : table) {
-    std::string full_key = prefix.empty() ? std::string(key) : prefix + "_" + std::string(key);
+// Trim leading/trailing ASCII whitespace from a config line/token.
+std::string_view TrimWS(std::string_view s) {
+  constexpr const char* kWs = " \t\r\n";
+  size_t b = s.find_first_not_of(kWs);
+  if (b == std::string_view::npos) return {};
+  size_t e = s.find_last_not_of(kWs);
+  return s.substr(b, e - b + 1);
+}
 
-    if (value.is_table()) {
-      ApplyTomlTable(*value.as_table(), full_key);
-    } else {
-      std::string value_str;
-      if (value.is_boolean()) {
-        value_str = value.as_boolean()->get() ? "true" : "false";
-      } else if (value.is_integer()) {
-        value_str = std::to_string(value.as_integer()->get());
-      } else if (value.is_floating_point()) {
-        value_str = std::to_string(value.as_floating_point()->get());
-      } else if (value.is_string()) {
-        value_str = value.as_string()->get();
-      } else {
-        REXLOG_WARN("Config: unsupported type for key '{}'", full_key);
-        continue;
-      }
-
-      if (SetFlagByName(full_key, value_str)) {
-        REXLOG_DEBUG("Config: {} = {}", full_key, value_str);
-      } else {
-        REXLOG_WARN("Config: unknown cvar '{}'", full_key);
-      }
-    }
+// Strip one layer of matching surrounding quotes (tolerate legacy quoted values).
+std::string_view Unquote(std::string_view v) {
+  if (v.size() >= 2 && ((v.front() == '"' && v.back() == '"') ||
+                        (v.front() == '\'' && v.back() == '\''))) {
+    return v.substr(1, v.size() - 2);
   }
+  return v;
 }
 
 // todo(tomc): move restart manager to Runtime
@@ -424,11 +409,8 @@ std::string SerializeToTOML() {
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
     if (entry.getter() != entry.default_value) {
-      if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
-      } else {
-        result += entry.name + " = " + entry.getter() + "\n";
-      }
+      // INI: values are written unquoted (strings included).
+      result += entry.name + " = " + entry.getter() + "\n";
     }
   }
   return result;
@@ -439,11 +421,8 @@ std::string SerializeToTOML(std::string_view category) {
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
     if (entry.category == category && entry.getter() != entry.default_value) {
-      if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
-      } else {
-        result += entry.name + " = " + entry.getter() + "\n";
-      }
+      // INI: values are written unquoted (strings included).
+      result += entry.name + " = " + entry.getter() + "\n";
     }
   }
   return result;
@@ -491,19 +470,44 @@ std::vector<std::string> Init(int argc, char** argv) {
   return app.remaining();
 }
 
+// Simple INI: `key = value` lines, `#`/`;` comments. cvars live at the top
+// level; `[section]` bodies (e.g. `[log.levels]`, read separately by the
+// logging subsystem) are skipped here. Values may be optionally quoted.
 void LoadConfig(const std::filesystem::path& config_path) {
   if (!std::filesystem::exists(config_path)) {
     REXLOG_DEBUG("Config file not found: {}", config_path.string());
     return;
   }
 
-  try {
-    auto config = toml::parse_file(config_path.string());
-    ApplyTomlTable(config, "");
-    REXLOG_INFO("Loaded config from {}", config_path.string());
-  } catch (const toml::parse_error& err) {
-    REXLOG_ERROR("Failed to parse config {}: {}", config_path.string(), err.what());
+  std::ifstream file(config_path);
+  if (!file) {
+    REXLOG_ERROR("Failed to open config {}", config_path.string());
+    return;
   }
+
+  std::string line;
+  bool in_section = false;
+  int applied = 0;
+  while (std::getline(file, line)) {
+    std::string_view sv = TrimWS(line);
+    if (sv.empty() || sv.front() == '#' || sv.front() == ';') continue;
+    if (sv.front() == '[') {  // section header: cvars are top-level only
+      in_section = true;
+      continue;
+    }
+    if (in_section) continue;
+    size_t eq = sv.find('=');
+    if (eq == std::string_view::npos) continue;
+    std::string_view key = TrimWS(sv.substr(0, eq));
+    std::string_view value = Unquote(TrimWS(sv.substr(eq + 1)));
+    if (key.empty()) continue;
+    if (SetFlagByName(key, value)) {
+      ++applied;
+    } else {
+      REXLOG_WARN("Config: unknown cvar '{}'", std::string(key));
+    }
+  }
+  REXLOG_INFO("Loaded {} setting(s) from {}", applied, config_path.string());
 }
 
 void ApplyEnvironment() {

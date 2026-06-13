@@ -275,7 +275,15 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   const bool searching = !search.empty();
 
   const float scale = static_cast<float>(REXCVAR_GET(overlay_scale));
-  ImGui::SetNextWindowSize(ImVec2(620.0f * scale, 480.0f * scale), ImGuiCond_FirstUseEver);
+  // Open at the scaled size, but never larger than the host viewport, and clamp
+  // the size every frame so the window (and its resize grips) always stays
+  // on-screen even when overlay_scale is cranked up on a small display.
+  const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
+  ImVec2 want(620.0f * scale, 480.0f * scale);
+  if (want.x > work_size.x * 0.95f) want.x = work_size.x * 0.95f;
+  if (want.y > work_size.y * 0.95f) want.y = work_size.y * 0.95f;
+  ImGui::SetNextWindowSize(want, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(320.0f, 240.0f), work_size);
   ImGui::SetNextWindowBgAlpha(0.85f);
   if (!ImGui::Begin("Settings##rex", nullptr, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();

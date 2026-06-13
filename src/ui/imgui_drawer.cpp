@@ -105,6 +105,11 @@ void ImGuiDrawer::Initialize() {
   // Windows.
   io.IniFilename = nullptr;
 
+  // Allow resizing windows by dragging any edge, not just the bottom-right grip.
+  // When an overlay is scaled up (overlay_scale) on a small display the grip can
+  // fall off-screen, leaving no reachable handle to shrink the window.
+  io.ConfigWindowsResizeFromEdges = true;
+
   // Setup the font glyphs.
   ImFontConfig font_config;
   font_config.OversampleH = font_config.OversampleV = 1;

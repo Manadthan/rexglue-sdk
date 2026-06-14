@@ -221,18 +221,30 @@ inline bool precededByFnBoundary(const BinaryView& binary, uint32_t target, bool
   if (!p)
     return false;  // can't verify -> conservatively reject
   uint32_t prev = load_and_swap<uint32_t>(p);
+  // Definitive function boundaries, trusted in both modes:
   if (prev == 0x00000000u || prev == 0x60000000u)
     return true;  // zero / nop padding between functions
+  if (prev == 0x4E800020u)
+    return true;  // unconditional blr -- the previous function returned
+
+  // Strict mode (the lis/ori scan, which has no run>=2 corroboration) stops
+  // here. The endings below are AMBIGUOUS -- they can end a function OR sit
+  // mid-function -- so trusting them with no corroboration forges bogus
+  // functions: e.g. a `bctr` is usually a jump-table dispatch whose case bodies
+  // follow it, so the address after it (the table base / case 0, computed by a
+  // lis/addi) is NOT a function entry; registering it splits the function and
+  // orphans the internal `goto` into it (futari shell sub_820DFFD0).
+  if (strict)
+    return false;
+
+  // Loose mode (the data-table scan) has the run>=2 contiguity corroboration,
+  // so it can also accept these ambiguous endings.
   if ((prev & 0xFC0007FEu) == 0x4C000020u)
-    return true;  // bclr family (blr and conditional returns)
+    return true;  // bclr family (conditional returns)
   if ((prev & 0xFC0007FEu) == 0x4C000420u)
     return true;  // bcctr family (bctr, computed tail-jumps)
-  if (!strict && (prev & 0xFC000001u) == 0x48000000u)
-    return true;  // b / ba (unconditional branch): a tail branch ends a
-                  // function, but an *internal* branch looks identical. Only
-                  // trust it for the data-table scan, which has the run>=2
-                  // corroboration; the lis/ori scan (no corroboration, strict)
-                  // must not, or it splits functions at internal branch targets.
+  if ((prev & 0xFC000001u) == 0x48000000u)
+    return true;  // b / ba (unconditional branch / tail branch)
   return false;
 }
 

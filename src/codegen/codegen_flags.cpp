@@ -46,9 +46,17 @@ REXCVAR_DEFINE_BOOL(enable_data_ptr_scan, true, "Codegen",
                     "(runs of >=2 consecutive code pointers in data sections)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(enable_lis_ori_fn_scan, true, "Codegen",
+// Default OFF: a lis/addi pair that materializes a code address has no
+// corroboration that the address is a FUNCTION (vs a jump-table base, a case
+// body, or a data address), so it forges bogus functions that split real ones
+// and orphan internal gotos (e.g. futari shell sub_820DFFD0, a computed
+// jump-table base). It also never paid off in practice -- the Class-2 targets
+// it was meant to catch turned out to be runtime-populated table pointers, not
+// lis/ori-computed -- so it stays opt-in.
+REXCVAR_DEFINE_BOOL(enable_lis_ori_fn_scan, false, "Codegen",
                     "Harvest functions reached via runtime-computed indirect calls by scanning "
-                    "for lis/addi and lis/ori pairs that materialize a code address")
+                    "for lis/addi and lis/ori pairs that materialize a code address (opt-in: "
+                    "prone to false positives on jump-table bases)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_UINT32(max_resolve_iterations, 100, "Codegen",

@@ -1,6 +1,6 @@
 /**
  * @file        ui/rex_app.cpp
- * @brief       ReXApp implementation — compiled as part of the consumer executable
+ * @brief       ReXApp implementation - compiled as part of the consumer executable
  *
  * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
  *              All rights reserved.
@@ -10,6 +10,8 @@
  */
 
 #include <rex/rex_app.h>
+
+#include <cstdlib>
 
 #include <rex/cvar.h>
 #include <rex/ui/flags.h>
@@ -105,9 +107,9 @@ bool ReXApp::SetupEnvironment() {
 
   // Cache: cvar override, or user_dir/cache
   std::filesystem::path cache_dir;
-  std::string cache_path_cvar = REXCVAR_GET(cache_path);
-  if (!cache_path_cvar.empty()) {
-    cache_dir = cache_path_cvar;
+  std::string cache_root_cvar = REXCVAR_GET(cache_root);
+  if (!cache_root_cvar.empty()) {
+    cache_dir = cache_root_cvar;
   } else {
     cache_dir = user_dir / "cache";
   }
@@ -211,9 +213,11 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
       input_sys->SetActiveCallback([this]() {
-        if (!debug_overlay_ && !console_overlay_ && !settings_overlay_)
+        if (!imgui_drawer_->HasDialogs()) {
           return true;
-        return !imgui_drawer_->GetIO().WantCaptureMouse;
+        }
+        const auto& io = imgui_drawer_->GetIO();
+        return !io.WantCaptureMouse && !io.WantCaptureKeyboard;
       });
     }
   }
@@ -313,58 +317,76 @@ bool ReXApp::SetupPresentation() {
 
   auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(config_.graphics.get());
   if (graphics_system && graphics_system->presenter()) {
+    // SDK mode: the emulated-Xenos presenter drives the overlays.
     auto* presenter = graphics_system->presenter();
     auto* provider = graphics_system->provider();
     if (provider) {
       immediate_drawer_ = provider->CreateImmediateDrawer();
       if (immediate_drawer_) {
         immediate_drawer_->SetPresenter(presenter);
-        imgui_drawer_ = std::make_unique<rex::ui::ImGuiDrawer>(
-            window_.get(), 64, [this](ImFontAtlas* atlas) { OnConfigureFonts(atlas); });
-        imgui_drawer_->SetPresenterAndImmediateDrawer(presenter, immediate_drawer_.get());
-        rex::ui::RegisterBind("bind_debug_overlay", "F3", "Toggle debug overlay", [this] {
-          if (debug_overlay_) {
-            debug_overlay_.reset();
-          } else {
-            debug_overlay_ = std::make_unique<ui::DebugOverlayDialog>(imgui_drawer_.get(),
-                                                                      frame_stats_provider_);
-          }
-        });
-        rex::ui::RegisterBind("bind_console", "Backtick", "Toggle console overlay", [this] {
-          if (console_overlay_) {
-            console_overlay_.reset();
-          } else {
-            console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
-          }
-        });
-        rex::ui::RegisterBind("bind_settings", "F4", "Toggle settings overlay", [this] {
-          if (settings_overlay_) {
-            settings_overlay_.reset();
-          } else {
-            settings_overlay_ =
-                std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
-          }
-        });
-
-        if (REXCVAR_GET(show_startup_hints)) {
-          // The backtick key name isn't obvious to everyone; show the glyph as the key token.
-          std::string console_key = rex::cvar::Query<std::string>("bind_console");
-          if (console_key == "Backtick")
-            console_key = "`";
-          ui::ToastDialog::Show(
-              imgui_drawer_.get(),
-              fmt::format("{} - Settings  |  {} - Fullscreen  |  {} - Debug Console",
-                          rex::cvar::Query<std::string>("bind_settings"),
-                          rex::cvar::Query<std::string>("bind_fullscreen"), console_key));
-        }
-
-        OnCreateDialogs(imgui_drawer_.get());
+        SetupOverlays(presenter, immediate_drawer_.get());
       }
     }
     window_->SetPresenter(presenter);
+  } else if (!graphics_system) {
+    // Detached mode: the app brings its own renderer and drives its own paint
+    // loop. ReXApp owns the returned drawer via immediate_drawer_.
+    immediate_drawer_ = OnCreateImmediateDrawer();
+    if (immediate_drawer_) {
+      SetupOverlays(/*presenter=*/nullptr, immediate_drawer_.get());
+      // No window_->SetPresenter, no drawer SetPresenter: the app owns the
+      // surface and the present cadence.
+    }
   }
 
   return true;
+}
+
+void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDrawer* drawer) {
+  imgui_drawer_ = std::make_unique<rex::ui::ImGuiDrawer>(
+      window_.get(), 64, [this](ImFontAtlas* atlas) { OnConfigureFonts(atlas); });
+  // presenter is nullptr in detached mode; ImGuiDrawer tolerates that and the
+  // gated eager font upload in SetImmediateDrawer is skipped (font uploads
+  // lazily on the first Draw instead).
+  imgui_drawer_->SetPresenterAndImmediateDrawer(presenter, drawer);
+  rex::ui::RegisterBind("bind_debug_overlay", "F3", "Toggle debug overlay", [this] {
+    if (debug_overlay_) {
+      debug_overlay_.reset();
+    } else {
+      debug_overlay_ =
+          std::make_unique<ui::DebugOverlayDialog>(imgui_drawer_.get(), frame_stats_provider_);
+    }
+  });
+  rex::ui::RegisterBind("bind_console", "Backtick", "Toggle console overlay", [this] {
+    if (console_overlay_) {
+      console_overlay_.reset();
+    } else {
+      console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
+    }
+  });
+  rex::ui::RegisterBind("bind_settings", "F4", "Toggle settings overlay", [this] {
+    if (settings_overlay_) {
+      settings_overlay_.reset();
+    } else {
+      settings_overlay_ = std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
+    }
+  });
+
+  // Startup keyboard-shortcut hints. Only in SDK/presenter mode (detached apps
+  // drive their own UI and didn't show this before the SetupOverlays refactor).
+  if (presenter && REXCVAR_GET(show_startup_hints)) {
+    // The backtick key name isn't obvious to everyone; show the glyph as the key token.
+    std::string console_key = rex::cvar::Query<std::string>("bind_console");
+    if (console_key == "Backtick")
+      console_key = "`";
+    ui::ToastDialog::Show(
+        imgui_drawer_.get(),
+        fmt::format("{} - Settings  |  {} - Fullscreen  |  {} - Debug Console",
+                    rex::cvar::Query<std::string>("bind_settings"),
+                    rex::cvar::Query<std::string>("bind_fullscreen"), console_key));
+  }
+
+  OnCreateDialogs(imgui_drawer_.get());
 }
 
 void ReXApp::LaunchModule() {
@@ -425,7 +447,13 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   if (runtime_ && runtime_->kernel_state()) {
     runtime_->kernel_state()->TerminateTitle();
   }
-  app_context().QuitFromUIThread();
+  // Hard-exit rather than run subsystem teardown, which can deadlock on a host
+  // lock still held by a straggler TerminateTitle left running. Flush (not
+  // ShutdownLogging, which frees loggers a straggler may still use); the OS
+  // reclaims the rest.
+  REXLOG_INFO("Title terminated; hard-exiting process.");
+  rex::FlushLogging();
+  std::_Exit(0);
 }
 
 void ReXApp::OnDestroy() {
@@ -446,6 +474,10 @@ void ReXApp::OnDestroy() {
     imgui_drawer_->SetPresenterAndImmediateDrawer(nullptr, nullptr);
     imgui_drawer_.reset();
   }
+  // immediate_drawer_ was already unlinked from imgui_drawer_ above. Detach it
+  // from its presenter so SDK mode runs OnLeavePresenter() before disposal; in
+  // detached mode the drawer never had a presenter, so SetPresenter(nullptr) is
+  // a no-op.
   if (immediate_drawer_) {
     immediate_drawer_->SetPresenter(nullptr);
     immediate_drawer_.reset();

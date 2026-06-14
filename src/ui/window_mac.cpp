@@ -141,18 +141,21 @@ VirtualKey TranslateSDLScancode(SDL_Scancode scancode) {
       return VirtualKey::kUp;
     case SDL_SCANCODE_DOWN:
       return VirtualKey::kDown;
+    // Modifiers: report the GENERIC virtual key (kShift/kControl/kMenu), not the
+    // left/right-specific one. Win32 WM_KEYDOWN delivers the generic VK_SHIFT
+    // (window_win.cpp), and the keybind names + the rebind capture both use the
+    // generic key ("Shift" -> kShift). Returning kLShift here meant a pressed
+    // Shift set key_down_[kLShift] while the bind checked key_down_[kShift], so
+    // Shift (and Ctrl/Alt) never registered on macOS and couldn't be rebound.
     case SDL_SCANCODE_LSHIFT:
-      return VirtualKey::kLShift;
     case SDL_SCANCODE_RSHIFT:
-      return VirtualKey::kRShift;
+      return VirtualKey::kShift;
     case SDL_SCANCODE_LCTRL:
-      return VirtualKey::kLControl;
     case SDL_SCANCODE_RCTRL:
-      return VirtualKey::kRControl;
+      return VirtualKey::kControl;
     case SDL_SCANCODE_LALT:
-      return VirtualKey::kLMenu;
     case SDL_SCANCODE_RALT:
-      return VirtualKey::kRMenu;
+      return VirtualKey::kMenu;
     case SDL_SCANCODE_LGUI:
       return VirtualKey::kLWin;
     case SDL_SCANCODE_RGUI:

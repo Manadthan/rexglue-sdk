@@ -23,6 +23,8 @@ REXCVAR_DECLARE(uint32_t, progress_log_frequency);
 // Codegen/Analysis
 REXCVAR_DECLARE(uint32_t, max_discovery_iterations);
 REXCVAR_DECLARE(uint32_t, max_vtable_iterations);
+REXCVAR_DECLARE(bool, enable_data_ptr_scan);
+REXCVAR_DECLARE(bool, enable_lis_ori_fn_scan);
 REXCVAR_DECLARE(uint32_t, max_resolve_iterations);
 REXCVAR_DECLARE(uint32_t, max_eh_states);
 REXCVAR_DECLARE(uint32_t, max_eh_try_blocks);

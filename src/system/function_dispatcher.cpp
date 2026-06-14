@@ -13,6 +13,10 @@
  *              role as a function dispatch table rather than a CPU emulator.
  */
 
+#include <cstdlib>
+#include <mutex>
+#include <unordered_set>
+
 #include <rex/assert.h>
 #include <rex/dbg.h>
 #include <rex/logging.h>
@@ -35,6 +39,25 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 }  // namespace
 
 static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+  // Diagnostic harvest mode (env REX_HARVEST_INVALID): instead of aborting on
+  // the first unregistered indirect-call target, dedup-log every distinct one
+  // and return (no-op) so a single run surfaces ALL of them. Used to collect
+  // the runtime-materialized Class-2 function entries a module needs seeded.
+  // Default behavior (env unset) is unchanged: FATAL on the first miss.
+  static const bool harvest = [] {
+    const char* e = std::getenv("REX_HARVEST_INVALID");
+    return e && *e && e[0] != '0';
+  }();
+  if (harvest) {
+    static std::mutex mu;
+    static std::unordered_set<uint32_t> seen;
+    uint32_t target = ctx.last_indirect_target;
+    std::lock_guard<std::mutex> lock(mu);
+    if (seen.insert(target).second) {
+      REXLOG_WARN("[HARVEST] invalid call target 0x{:08X}", target);
+    }
+    return;
+  }
   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
             ctx.last_indirect_target);
 }

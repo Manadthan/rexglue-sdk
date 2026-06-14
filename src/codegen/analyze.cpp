@@ -54,9 +54,9 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
     return discoverResult;
   }
 
-  // 3.5. Function pointer scan: find lis/addi pairs loading code addresses
-  // TODO(tomc): disabled for now, causes too many false positives
-  // functionPointerScan(ctx);
+  // (The heuristic data-pointer-table and lis/ori function-pointer scans now run
+  // inside the Discover phase, before its iterative loop -- see phase_discover.cpp.
+  // Gated by enable_data_ptr_scan / enable_lis_ori_fn_scan.)
 
   // 4. Gap fill uncovered regions + discover blocks for gap-filled functions + cleanup
   if (reporter)

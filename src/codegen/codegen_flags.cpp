@@ -41,6 +41,16 @@ REXCVAR_DEFINE_UINT32(max_vtable_iterations, 100, "Codegen",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly)
     .range(1, 100000);
 
+REXCVAR_DEFINE_BOOL(enable_data_ptr_scan, true, "Codegen",
+                    "Harvest function pointers from non-RTTI data pointer-tables/vtables "
+                    "(runs of >=2 consecutive code pointers in data sections)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(enable_lis_ori_fn_scan, true, "Codegen",
+                    "Harvest functions reached via runtime-computed indirect calls by scanning "
+                    "for lis/addi and lis/ori pairs that materialize a code address")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_UINT32(max_resolve_iterations, 100, "Codegen",
                       "Max iterations for call target resolution")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly)

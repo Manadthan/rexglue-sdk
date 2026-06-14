@@ -15,6 +15,7 @@
 
 #include <array>
 #include <bitset>
+#include <cstdlib>
 #include <unordered_set>
 
 #include <rex/codegen/phases.h>
@@ -190,11 +191,149 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
   }
 }
 
+//=============================================================================
+// Shared helpers for the heuristic function-pointer scans below.
+//=============================================================================
+
+// A plausible function-pointer value: 4-aligned, in an executable section,
+// outside the import/export thunk table, and not a 64KB-"round" address (those
+// are section/page addresses that appear in data tables, not real entries).
+// Deliberately does NOT require a *decoded* code region -- the targets these
+// scans exist to find are exactly the ones missing from decoded regions.
+inline bool isPlausibleFnPtr(const BinaryView& binary, uint32_t a) {
+  if ((a & 0x3u) != 0)
+    return false;
+  if (!binary.isExecutable(a) || binary.isInImportExportRange(a))
+    return false;
+  if ((a & 0xFFFFu) == 0)
+    return false;
+  return true;
+}
+
+// A real function entry is immediately preceded by the previous function's
+// terminator (or inter-function padding). Requiring this rejects candidates
+// that point into the MIDDLE of a real function -- registering those would
+// split the function and orphan its internal branches ("unresolved branch"
+// FATALs). Reads the raw preceding word from the image (not the decoder) so it
+// works for targets outside any decoded code region.
+inline bool precededByFnBoundary(const BinaryView& binary, uint32_t target, bool strict) {
+  const uint8_t* p = binary.translate(target - 4);
+  if (!p)
+    return false;  // can't verify -> conservatively reject
+  uint32_t prev = load_and_swap<uint32_t>(p);
+  if (prev == 0x00000000u || prev == 0x60000000u)
+    return true;  // zero / nop padding between functions
+  if ((prev & 0xFC0007FEu) == 0x4C000020u)
+    return true;  // bclr family (blr and conditional returns)
+  if ((prev & 0xFC0007FEu) == 0x4C000420u)
+    return true;  // bcctr family (bctr, computed tail-jumps)
+  if (!strict && (prev & 0xFC000001u) == 0x48000000u)
+    return true;  // b / ba (unconditional branch): a tail branch ends a
+                  // function, but an *internal* branch looks identical. Only
+                  // trust it for the data-table scan, which has the run>=2
+                  // corroboration; the lis/ori scan (no corroboration, strict)
+                  // must not, or it splits functions at internal branch targets.
+  return false;
+}
+
+//=============================================================================
+// Data Pointer-Table Scan: harvest non-RTTI vtables / dispatch tables.
+//
+// The RTTI VTableScanner only finds vtables reachable from a Complete Object
+// Locator. Classes compiled without RTTI -- and plain function-pointer tables
+// (mode/state dispatch, callback arrays) -- leave runs of code pointers in data
+// sections that the call-graph walk never reaches, so their targets are never
+// recompiled and a runtime dispatch through them FATALs on an unregistered
+// address. Harvest runs of >=2 consecutive 4-aligned pointers into executable
+// memory as function entry points.
+//
+// Unlike the (disabled) lis/addi instruction scan, the >=2 contiguity
+// requirement makes false positives unlikely: a lone code-range dword in data
+// is usually not a function pointer, but two-plus in a row almost always are.
+//=============================================================================
+size_t dataPointerTableScan(CodegenContext& ctx) {
+  if (!REXCVAR_GET(enable_data_ptr_scan))
+    return 0;
+  if (!ctx.hasDecoded())
+    return 0;
+
+  auto& graph = ctx.graph;
+  auto& binary = ctx.binary();
+  auto& decoded = ctx.decoded();
+
+  auto isCodePtr = [&](uint32_t a) { return isPlausibleFnPtr(binary, a); };
+
+  size_t newFunctions = 0;
+
+  for (const auto& section : binary.sections()) {
+    if (!section.data || section.size < 8)
+      continue;
+
+    const uint8_t* data = section.data;
+    uint32_t base = section.baseAddress;
+    size_t size = section.size & ~size_t{3};
+
+    size_t i = 0;
+    while (i + 4 <= size) {
+      uint32_t addr = base + static_cast<uint32_t>(i);
+      // Skip dwords inside decoded code: there, load/store opcodes (e.g.
+      // lwz r,d(rA)) alias code-range values and would forge thousands of
+      // bogus tables. Pointer tables live in data, never in the code stream.
+      if (decoded.isInCodeRegion(addr)) {
+        i += 4;
+        continue;
+      }
+      if (!isCodePtr(load_and_swap<uint32_t>(data + i))) {
+        i += 4;
+        continue;
+      }
+      // Measure the run of consecutive code pointers.
+      size_t j = i;
+      while (j + 4 <= size && !decoded.isInCodeRegion(base + static_cast<uint32_t>(j)) &&
+             isCodePtr(load_and_swap<uint32_t>(data + j))) {
+        j += 4;
+      }
+      if ((j - i) / 4 >= 2) {
+        for (size_t k = i; k < j; k += 4) {
+          uint32_t target = load_and_swap<uint32_t>(data + k);
+          if (graph.isEntryPoint(target))
+            continue;
+          if (!precededByFnBoundary(binary, target, /*strict=*/false))
+            continue;  // not a real function entry -> would split a function
+          graph.addFunction(target, 4, FunctionAuthority::VTABLE, true);
+          newFunctions++;
+        }
+      }
+      i = j;
+    }
+  }
+
+  REXCODEGEN_TRACE("Analyze: data pointer-table scan registered {} new functions", newFunctions);
+  return newFunctions;
+}
+
+size_t functionPointerScan(CodegenContext& ctx);  // defined below
+
 void discoverAllFunctions(CodegenContext& ctx) {
   REXCODEGEN_TRACE("Analyze: starting iterative discovery...");
 
   auto& graph = ctx.graph;
   auto& binary = ctx.binary();
+
+  // Harvest heuristic function-pointer targets BEFORE the discovery loop. Both
+  // scans find functions reached only through pointers/computed indirect calls;
+  // those same functions are also targets of direct branches/tail-calls from
+  // other code, so registering them up front (like manual seeds) lets the loop
+  // resolve those branches instead of baking in "unresolved branch" traps.
+  // Registering them afterwards is too late -- the callers are already final.
+  {
+    size_t nTable = dataPointerTableScan(ctx);
+    size_t nLisOri = functionPointerScan(ctx);
+    REXCODEGEN_TRACE(
+        "Analyze: pre-discovery scans seeded {} (pointer-table) + {} (lis/ori) "
+        "functions",
+        nTable, nLisOri);
+  }
 
   // Iterative discovery
   size_t iteration = 0;
@@ -268,22 +407,34 @@ void discoverAllFunctions(CodegenContext& ctx) {
 }
 
 //=============================================================================
-// Function Pointer Scan: find lis/addi pairs loading code addresses
-// TODO(tomc): THIS IS WIP AND PROB A BAD IDEA LOL LETS SEE
+// Function Pointer Scan: find lis/addi and lis/ori pairs that materialize a
+// code address. These catch functions reached only through a runtime-computed
+// indirect call (e.g. mtctr/bctr through a register built by lis+ori) -- they
+// have no static call/branch xref and aren't in any data pointer-table, so
+// neither the call-graph walk nor dataPointerTableScan finds them, and a
+// dispatch through them FATALs as "call to unregistered function".
+//
+// This was historically disabled for false positives: a lis/addi pair can
+// compute a data address, a return address, or a within-function label. The
+// guards below (executable + non-round + preceded by a function boundary, and
+// run before discovery so callers resolve) make it safe enough to enable.
 //=============================================================================
-void functionPointerScan(CodegenContext& ctx) {
+size_t functionPointerScan(CodegenContext& ctx) {
+  if (!REXCVAR_GET(enable_lis_ori_fn_scan))
+    return 0;
   if (!ctx.hasDecoded()) {
     REXCODEGEN_WARN("functionPointerScan: DecodedBinary not initialized, skipping");
-    return;
+    return 0;
   }
 
   auto& graph = ctx.graph;
+  auto& binary = ctx.binary();
   auto& decoded = ctx.decoded();
   const auto& codeRegions = decoded.codeRegions();
 
   if (codeRegions.empty()) {
     REXCODEGEN_WARN("functionPointerScan: no code regions, skipping");
-    return;
+    return 0;
   }
 
   // Build set of existing functions to avoid duplicates
@@ -330,26 +481,17 @@ void functionPointerScan(CodegenContext& ctx) {
         int16_t lo = static_cast<int16_t>(insn->D.d);
         uint32_t fullAddr = hi + lo;  // Sign-extended add
 
-        // PPC instructions are 4-byte aligned
-        if (fullAddr & 0x3)
-          continue;
-
-        // Check if this address is in a code region
-        const CodeRegion* targetRegion = decoded.regionContaining(fullAddr);
-        if (!targetRegion)
-          continue;
-
-        // Skip if already a known function
         if (existingFunctions.contains(fullAddr))
           continue;
-
-        // Skip if it's an internal address (within same function's likely range)
-        // Heuristic: if target is very close to current address, probably internal label
-        int32_t distance = static_cast<int32_t>(fullAddr) - static_cast<int32_t>(addr);
-        if (distance > -0x1000 && distance < 0x1000) {
-          // Could be local label, skip for now
+        // A target computed within ~4KB of the computing instruction is almost
+        // always the address of nearby data / a local label / a return point,
+        // not a pointer to a distant function (the classic lis/addi-of-local
+        // false positive). Real cross-subsystem function pointers are far away.
+        if (std::abs(static_cast<int32_t>(fullAddr - addr)) < 0x1000)
           continue;
-        }
+        if (!isPlausibleFnPtr(binary, fullAddr) ||
+            !precededByFnBoundary(binary, fullAddr, /*strict=*/true))
+          continue;
 
         // Register as function with DISCOVERED authority and hasXrefs=true
         graph.addFunction(fullAddr, 4, FunctionAuthority::DISCOVERED, true);
@@ -370,19 +512,12 @@ void functionPointerScan(CodegenContext& ctx) {
         uint16_t lo = static_cast<uint16_t>(insn->D.d);
         uint32_t fullAddr = hi | lo;  // Unsigned OR
 
-        // PPC instructions are 4-byte aligned
-        if (fullAddr & 0x3)
-          continue;
-
-        const CodeRegion* targetRegion = decoded.regionContaining(fullAddr);
-        if (!targetRegion)
-          continue;
-
         if (existingFunctions.contains(fullAddr))
           continue;
-
-        int32_t distance = static_cast<int32_t>(fullAddr) - static_cast<int32_t>(addr);
-        if (distance > -0x1000 && distance < 0x1000)
+        if (std::abs(static_cast<int32_t>(fullAddr - addr)) < 0x1000)
+          continue;  // local data/label/return point, not a distant fn pointer
+        if (!isPlausibleFnPtr(binary, fullAddr) ||
+            !precededByFnBoundary(binary, fullAddr, /*strict=*/true))
           continue;
 
         graph.addFunction(fullAddr, 4, FunctionAuthority::DISCOVERED, true);
@@ -400,6 +535,7 @@ void functionPointerScan(CodegenContext& ctx) {
   }
 
   REXCODEGEN_TRACE("functionPointerScan: found {} new function pointer targets", foundCount);
+  return foundCount;
 }
 
 }  // anonymous namespace

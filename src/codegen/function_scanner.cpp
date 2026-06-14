@@ -1444,6 +1444,20 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
   uint32_t scanAddr = bctrAddr;
   bool foundMtctr = false;
   bool foundLoad = false;
+  uint32_t loadAddr = 0;  // address of the indexed load (anchor for the local index window)
+
+  // The dispatch's index dataflow (scaling slwi + register copies that map the
+  // bound register to the switch register) is a tight cluster immediately
+  // around the indexed load -- it may be interleaved with the table-base
+  // lis/addi, but never strays far from the load. Past this local window, a
+  // write to the index register belongs to unrelated code; tracing through it
+  // hands scanForBounds the wrong register (the SOTN equip dispatch retargets
+  // r11->r30 ~0xF4 before the load and under-sizes 82->17). Keying the freeze
+  // on distance-from-load (rather than "table address resolved") also keeps the
+  // reco_normal dispatch correct, where the legit r11<-r10 copy sits one
+  // instruction PAST the table-base lis (so the old table-resolved freeze cut
+  // it off and under-sized 10->2, dropping cases that FATAL at runtime).
+  constexpr uint32_t kIndexLocalWindow = 0x20;  // 8 instructions back from the load
 
   for (int i = 0; i < kMaxBackwardScan && scanAddr >= containingRegion.start + 4; i++) {
     scanAddr -= 4;
@@ -1476,6 +1490,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         finalIndexReg = indexReg;
         emitIndexReg = indexReg;
         foundLoad = true;
+        loadAddr = scanAddr;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lwzx at 0x{:08X}", bctrAddr,
                          scanAddr);
         continue;
@@ -1491,6 +1506,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         finalIndexReg = indexReg;
         emitIndexReg = indexReg;
         foundLoad = true;
+        loadAddr = scanAddr;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lbzx at 0x{:08X}", bctrAddr,
                          scanAddr);
         continue;
@@ -1506,6 +1522,7 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         finalIndexReg = indexReg;
         emitIndexReg = indexReg;
         foundLoad = true;
+        loadAddr = scanAddr;
         REXCODEGEN_TRACE("detectJumpTable: bctr=0x{:08X} found lhzx at 0x{:08X}", bctrAddr,
                          scanAddr);
         continue;
@@ -1554,18 +1571,17 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
     // NOTE: SH must be > 0 for a real shift; SH=0 is just a move/no-op (clrlwi r,r,0)
     // IMPORTANT: Stop tracing if another instruction writes to indexReg (breaks the chain)
     //
-    // Also stop once the table address is fully resolved. In backward order the
-    // dispatch's own index scaling (slwi) and register copies always sit between
-    // the indexed load and the table-address lis/addi, so by the time tableAddr
-    // is complete the legitimate index chain has already been traced. Any later
-    // (further-back) write to the index register belongs to unrelated code in the
-    // scan window; retargeting through it hands scanForBounds the wrong register,
-    // which then false-matches an unrelated cmpli and UNDER-SIZES the table (e.g.
-    // the SOTN equip dispatch traced r11 -> r30 and sized 17 entries vs the real
-    // 82, dropping case bodies that then FATAL at runtime).
-    bool tableFullyResolved =
-        tableAddr != 0 && (tableType == JumpTableType::kAbsolute || baseAddr != 0);
-    if (foundLoad && indexReg != 0xFF && !tableFullyResolved) {
+    // Also stop once the backward scan leaves the load's local dispatch window.
+    // The legitimate index chain (scaling + register copies) clusters tightly
+    // around the indexed load; a write to the index register more than
+    // kIndexLocalWindow back is unrelated code, and retargeting through it hands
+    // scanForBounds the wrong register -> wrong cmpli -> mis-sized table. (This
+    // replaces an earlier "freeze when the table address resolves" heuristic,
+    // which under-sized reco_normal 10->2 because its legit r11<-r10 copy sits
+    // one instruction past the table-base lis. Distance-from-load is correct for
+    // both: it still freezes SOTN's far r11->r30 retarget, keeping 82 entries.)
+    bool pastLocalWindow = (loadAddr != 0) && (loadAddr - scanAddr) > kIndexLocalWindow;
+    if (foundLoad && indexReg != 0xFF && !pastLocalWindow) {
       // Check if this instruction writes to indexReg
       bool writesToIndexReg = false;
       uint8_t destReg = 0xFF;

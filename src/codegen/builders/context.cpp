@@ -389,6 +389,27 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
           println("\tif ({}{}.{}) goto loc_{:08X};", not_ ? "!" : "", cr(insn.operands[0]), cond,
                   target);
         }
+      } else if (const auto* callTarget = findCallTarget(base);
+                 callTarget && (callTarget->isFunction() || callTarget->isImport())) {
+        // Out of range, but the analyzer DID record a tail-call edge at this
+        // site that classifyTarget missed (the same over-merged / multi-entry
+        // base-proximity case the range check above handles for in-range
+        // targets). Trust the stored edge and emit a conditional tail call
+        // instead of FATAL-ing on a branch whose target we actually resolved --
+        // mirroring the unconditional `b` path (build_b -> emit_function_call).
+        std::string name;
+        if (callTarget->isFunction()) {
+          name = callTarget->asFunction()->name();
+        } else {
+          const auto& importTarget = std::get<CallTarget::ToImport>(callTarget->value);
+          name = "__imp__" + importTarget.name;
+          std::replace(name.begin(), name.end(), '@', '_');
+          std::replace(name.begin(), name.end(), '.', '_');
+        }
+        println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
+        println("\t\t{}(ctx, base);", name);
+        println("\t\treturn;");
+        println("\t}}");
       } else {
         REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
         println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);

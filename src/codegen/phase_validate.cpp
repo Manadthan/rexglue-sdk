@@ -52,6 +52,7 @@ VoidResult validateGraph(CodegenContext& ctx) {
   size_t functionsChecked = 0;
   size_t callsChecked = 0;
   size_t edgesVerified = 0;
+  size_t foreignBodyBranches = 0;
 
   for (const auto& [addr, node] : graph.functions()) {
     functionsChecked++;
@@ -136,8 +137,43 @@ VoidResult validateGraph(CodegenContext& ctx) {
             }
           }
         }
+
+        // Diagnostic (additive, no build-stop): flag branches whose target
+        // lands inside ANOTHER function's body with no resolving call edge --
+        // the dormant "Unresolved branch"/"Unresolved call" REX_FATAL class
+        // codegen emits for over-merged / multi-entry shared code. Covers both
+        // unconditional (b) and conditional (bc); the checks above never look
+        // at bc at all. Counted + warned so the scope is visible; promotion to
+        // a hard error is left to a future cvar.
+        {
+          uint32_t op = PPC_OP(insn);
+          if ((op == PPC_OP_B || op == PPC_OP_BC) && !PPC_BA(insn)) {
+            uint32_t site = block.base + static_cast<uint32_t>(offset);
+            int32_t branchOffset = (op == PPC_OP_B) ? PPC_BI(insn) : PPC_BD(insn);
+            uint32_t target = site + static_cast<uint32_t>(branchOffset);
+            if (!node->containsAddress(target) && !node->isWithinBounds(target) &&
+                !graph.isEntryPoint(target) && !graph.isImport(target)) {
+              const FunctionNode* containingFunc = graph.getFunctionContaining(target);
+              if (containingFunc && containingFunc != node.get() &&
+                  target != containingFunc->base() && !findCallEdgeAt(node.get(), site)) {
+                foreignBodyBranches++;
+                REXCODEGEN_WARN(
+                    "Branch into foreign function body, no edge: {} 0x{:08X} -> 0x{:08X} "
+                    "(inside {}) -- dormant REX_FATAL",
+                    (op == PPC_OP_B) ? "b" : "bc", site, target, containingFunc->name());
+              }
+            }
+          }
+        }
       }
     }
+  }
+
+  if (foreignBodyBranches > 0) {
+    REXCODEGEN_WARN(
+        "Analyze: {} branch(es) target a foreign function body with no call edge "
+        "(dormant REX_FATAL class -- candidates for function split / seeding)",
+        foreignBodyBranches);
   }
 
   REXCODEGEN_TRACE("Analyze: checked {} branches in {} functions, verified {} edges", callsChecked,

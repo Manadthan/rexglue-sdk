@@ -114,6 +114,13 @@ class FunctionDispatcher : public IModuleRegistrar {
     uint32_t image_size;
     uint32_t next_thunk_address;
     uint32_t thunk_limit;
+    // Cache of host func -> already-allocated thunk address. Repeated
+    // XexGetProcedureAddress calls for the same export must reuse one thunk
+    // instead of leaking a pool slot per call (which exhausts the pool and
+    // then mis-reports the export as "not found"). Also matches real hardware,
+    // where a given export resolves to a stable address. Dropped with the
+    // module on UnregisterModule.
+    std::unordered_map<::PPCFunc*, uint32_t> thunk_cache;
   };
 
   ModuleTableInfo* FindModuleByAddress(uint32_t guest_address);

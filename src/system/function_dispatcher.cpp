@@ -314,6 +314,13 @@ uint32_t FunctionDispatcher::AllocateThunk(::PPCFunc* func, uint32_t caller_addr
     }
   }
 
+  // Reuse an existing thunk for this func instead of burning a new pool slot
+  // on every call (XexGetProcedureAddress is often polled per-frame).
+  auto cached = mod->thunk_cache.find(func);
+  if (cached != mod->thunk_cache.end()) {
+    return cached->second;
+  }
+
   if (mod->next_thunk_address >= mod->thunk_limit) {
     REXLOG_ERROR("Thunk address space exhausted for module at {:08X}", mod->code_base);
     return 0;
@@ -324,6 +331,7 @@ uint32_t FunctionDispatcher::AllocateThunk(::PPCFunc* func, uint32_t caller_addr
     mod->next_thunk_address -= 4;
     return 0;
   }
+  mod->thunk_cache.emplace(func, addr);
   return addr;
 }
 

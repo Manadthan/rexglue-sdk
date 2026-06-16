@@ -141,6 +141,21 @@ else()
     add_compile_options(-fno-char8_t)
 endif()
 
+# Link MSVC's oldnames.lib under the clang++ GNU driver. It supplies the
+# POSIX->ISO name aliases (e.g. fileno->_fileno) that translation units using
+# POSIX stdio names rely on -- Tracy's profiler is the current offender
+# (HandleSourceCodeQuery calls fileno), which fails a from-scratch link with
+# "lld-link: error: undefined symbol: __declspec(dllimport) fileno".
+# clang-cl auto-links oldnames; the GNU driver does not. The guard targets the
+# GNU driver on the MSVC runtime only: clang-cl reports FRONTEND_VARIANT MSVC
+# (skipped, already covered), MinGW reports SIMULATE_ID GNU (skipped, no
+# oldnames.lib), and non-Windows is excluded by WIN32.
+if(WIN32
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"
+   AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    add_link_options(-loldnames)
+endif()
+
 # Platform detection (supports AMD64 and ARM64)
 set(REX_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
 if(APPLE AND CMAKE_OSX_ARCHITECTURES)

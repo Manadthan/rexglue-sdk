@@ -151,6 +151,19 @@ function(rexglue_apply_target_settings target_name)
             target_compile_options(${target_name} PRIVATE -msse4.1)
         endif()
     endif()
+
+    # Link MSVC's oldnames.lib under the clang++ GNU driver so a host or guest
+    # target that uses POSIX stdio names (e.g. fileno) links from scratch. The
+    # SDK applies the same flag globally for its own targets (see the top-level
+    # CMakeLists), but consumer targets live in the parent scope and do not
+    # inherit that directory-level option, so set it per-target here. clang-cl
+    # auto-links oldnames (FRONTEND_VARIANT MSVC, skipped); MinGW has no
+    # oldnames.lib (SIMULATE_ID GNU, skipped); non-Windows is excluded by WIN32.
+    if(WIN32
+       AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"
+       AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        target_link_options(${target_name} PRIVATE -loldnames)
+    endif()
 endfunction()
 
 #==========================================================

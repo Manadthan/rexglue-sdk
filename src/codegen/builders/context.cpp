@@ -241,6 +241,29 @@ void BuilderContext::emit_function_call(uint32_t address) {
     return;
   }
 
+  // No tail-call edge was recorded at this site, but `address` is a constant
+  // branch target we know statically. If a function is registered at exactly
+  // that address, call it directly rather than FATAL-ing. This recovers `b`
+  // tail calls that classifyTarget routed through the call path
+  // (TargetKind::Function, because isEntryPoint(target) is true) in CAVE's
+  // over-merged / multi-entry code, where getFunctionContaining(site) resolved
+  // to an overlapping neighbor so discovery never recorded a per-site edge.
+  // Only fires on the path that would otherwise FATAL, so it cannot change a
+  // resolved emission. Mirrors the by-target lookup the bctr jump-table path
+  // already uses (graph().getFunction(label)).
+  if (auto* targetFn = graph().getFunction(address)) {
+    const auto& name = targetFn->name();
+
+    // Save/restore helpers are handled by local-variable tracking (as above).
+    if (cfg.nonVolatileRegistersAsLocalVariables &&
+        (name.find("__rest") == 0 || name.find("__save") == 0)) {
+      return;
+    }
+
+    println("\t{}(ctx, base);", name);
+    return;
+  }
+
   // No pre-resolved target found - this is an error
   REXCODEGEN_ERROR("Unresolved function 0x{:08X} from 0x{:08X} (no CallTarget in FunctionNode)",
                    address, base);

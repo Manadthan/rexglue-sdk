@@ -149,7 +149,9 @@ u32 NtQueryInformationFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> i
       break;
     }
     case XFileXctdCompressionInformation: {
-      REXKRNL_ERROR(
+      // Benign: titles probe this for streamed/compressed assets and handle the
+      // failure gracefully. Demoted ERROR -> DEBUG so it doesn't spam the log.
+      REXKRNL_DEBUG(
           "NtQueryInformationFile(XFileXctdCompressionInformation) "
           "unimplemented");
       // Files that are XCTD compressed begin with the magic 0x0FF512ED but we

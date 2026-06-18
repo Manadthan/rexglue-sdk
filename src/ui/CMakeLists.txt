@@ -143,6 +143,11 @@ if(WIN32)
     target_link_libraries(rexui PUBLIC
         dwmapi
         Shcore
+        # presenter.cpp uses DXGI (CreateDXGIFactory1 / IDXGIOutput::WaitForVBlank)
+        # for its Win32 UI-vsync tick thread on ANY graphics backend, so dxgi/dxguid
+        # are platform deps, not D3D12 deps (needed for Windows+Vulkan builds).
+        dxgi
+        dxguid
     )
 elseif(APPLE)
     target_link_libraries(rexui PUBLIC SDL3::SDL3)
@@ -161,11 +166,9 @@ else()
     )
 endif()
 
-# D3D12 backend dependencies
+# D3D12 backend dependencies (dxgi/dxguid are linked above for all Win32 builds)
 if(REXGLUE_USE_D3D12)
     target_link_libraries(rexui PUBLIC
-        dxgi
-        dxguid
         dxc-headers
     )
 endif()

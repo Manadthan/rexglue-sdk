@@ -11,6 +11,7 @@
 
 #include <cstring>
 
+#include <rex/cvar.h>
 #include <rex/kernel/xam/module.h>
 #include <rex/platform.h>
 #include <rex/system/kernel_state.h>
@@ -31,6 +32,11 @@
 #include <netinet/ip.h>
 #include <sys/socket.h>
 #endif
+
+REXCVAR_DEFINE_BOOL(net_bind_loopback_only, true, "Network",
+                    "Redirect wildcard (INADDR_ANY) socket binds to loopback so "
+                    "single-player titles don't trip the OS firewall prompt "
+                    "(these recompilations don't use Xbox LIVE networking)");
 
 namespace rex::system {
 
@@ -111,7 +117,28 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 }
 
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
-  int ret = bind(native_handle_, (sockaddr*)name, name_len);
+  sockaddr* bind_addr = (sockaddr*)name;
+  int bind_len = name_len;
+
+#if REX_PLATFORM_WIN32
+  // These titles are single-player only (no Xbox LIVE), but their netcode binds
+  // a fixed listening port on INADDR_ANY, which makes Windows pop the Defender
+  // Firewall "allow access" dialog on first launch. Redirect a wildcard bind to
+  // loopback: the bind still succeeds (the title's network state machine needs
+  // it) but no externally-visible listener exists, so Windows never prompts. No
+  // real peers exist, so this is behavior-preserving for single-player.
+  sockaddr_in loopback{};
+  if (REXCVAR_GET(net_bind_loopback_only) && name_len >= static_cast<int>(sizeof(sockaddr_in))) {
+    std::memcpy(&loopback, name, sizeof(loopback));
+    if (loopback.sin_addr.s_addr == htonl(INADDR_ANY)) {
+      loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      bind_addr = (sockaddr*)&loopback;
+      bind_len = sizeof(loopback);
+    }
+  }
+#endif
+
+  int ret = bind(native_handle_, bind_addr, bind_len);
 
 #if !REX_PLATFORM_WIN32
   // On Linux/macOS, binding to a privileged port (<1024) requires elevated

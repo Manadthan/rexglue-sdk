@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 
 #include <rex/assert.h>
+#include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/shader/spirv_translator.h>
 #include <rex/math.h>
 
@@ -578,6 +579,13 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
     // Whether to use gradients (implicit or explicit) for LOD calculation.
     bool use_computed_lod = instr.attributes.use_computed_lod &&
                             (is_pixel_shader() || instr.attributes.use_register_gradients);
+    // MoltenVK computes implicit texture gradients inconsistently across a quad's two
+    // triangles, drawing diagonal mip-seam lines along quad diagonals (worst on reflective
+    // surfaces like car glass). When pixel_shader_explicit_lod is set (macOS opts in), force
+    // pixel-shader fetches to explicit (non-gradient) LOD to avoid it. See flags.h.
+    if (use_computed_lod && is_pixel_shader() && REXCVAR_GET(pixel_shader_explicit_lod)) {
+      use_computed_lod = false;
+    }
     if (instr.opcode == ucode::FetchOpcode::kGetTextureComputedLod &&
         (!use_computed_lod || instr.attributes.use_register_gradients)) {
       assert_always();

@@ -24,6 +24,14 @@ REXCVAR_DEFINE_BOOL(depth_transfer_not_equal_test, true, "GPU",
 REXCVAR_DEFINE_BOOL(gamma_render_target_as_unorm16, true, "GPU",
                     "Use R16G16B16A16_UNORM for gamma render targets (more accurate than sRGB)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_BOOL(pixel_shader_explicit_lod, false, "GPU",
+                    "Force pixel-shader texture fetches to use explicit (non-gradient) LOD "
+                    "instead of implicit gradient-computed LOD. Works around MoltenVK computing "
+                    "per-triangle texture gradients inconsistently across a quad's two triangles, "
+                    "which draws diagonal mip-seam lines along quad diagonals (worst on reflective "
+                    "surfaces like car glass). Trades those seams for loss of mipmapping (possible "
+                    "distant-texture shimmer). Intended for macOS/MoltenVK only.")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(dump_shaders, "", "GPU", "Path to dump shaders to");
 REXCVAR_DEFINE_BOOL(use_fuzzy_alpha_epsilon, false, "GPU",
                     "Use approximate compare for alpha test values to prevent "

@@ -1548,6 +1548,20 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
           command_processor_.SubmitBarriers(true);
           command_buffer.CmdVkDispatch(clear_group_count.first, clear_group_count.second, 1);
         }
+        if (clear_depth && clear_color) {
+          // The depth and color clears are two separate unordered compute-shader
+          // writes into the shared EDRAM buffer. Their tile ranges can overlap
+          // (the "highly unlikely" assumption above does not hold for all
+          // titles), so a write-after-write self-dependency barrier is required
+          // between them. Without it the two dispatches are unordered on drivers
+          // that don't implicitly serialize compute writes to the same storage
+          // buffer (e.g. RADV), so the surviving clear value is nondeterministic
+          // (flagged by synchronization validation as
+          // SYNC-HAZARD-WRITE-AFTER-WRITE, vkCmdDispatch->vkCmdDispatch,
+          // write_barriers = 0).
+          MarkEdramBufferModified();
+          CommitEdramBufferShaderWrites();
+        }
         if (clear_color) {
           command_processor_.BindExternalComputePipeline(
               resolve_info.color_edram_info.format_is_64bpp ? resolve_fsi_clear_64bpp_pipeline_
@@ -6351,7 +6365,19 @@ bool VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dum
               kDumpSamplesPerGroupY,
           1);
     }
+    // Each render target dumped into the shared EDRAM buffer is a separate set
+    // of unordered compute-shader writes. Successive render targets (and the
+    // resolve copy that follows) can target overlapping EDRAM tiles, so a
+    // write-after-write self-dependency barrier on the buffer is required
+    // between them. Without it the writes are unordered on drivers that don't
+    // implicitly serialize compute dispatches to the same storage buffer (e.g.
+    // RADV), corrupting the resolved data the texture cache later samples
+    // (observed as severe texture flicker; flagged by synchronization
+    // validation as SYNC-HAZARD-WRITE-AFTER-WRITE, vkCmdDispatch->vkCmdDispatch,
+    // write_barriers = 0). Mark and immediately commit so the barrier is placed
+    // before the next render target's dispatches.
     MarkEdramBufferModified();
+    CommitEdramBufferShaderWrites();
   }
   return all_pipelines_available;
 }

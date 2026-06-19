@@ -214,8 +214,31 @@ void VulkanSharedMemory::Use(Usage usage, std::pair<uint32_t, uint32_t> written_
       // Committing the previous write, while not changing the access mask
       // (passing false as whether to skip the barrier if no masks are changed
       // for this reason).
-      offset = VkDeviceSize(last_written_range_.first);
-      size = VkDeviceSize(last_written_range_.second);
+      //
+      // The self-dependency barrier must cover not only the previously written
+      // range but also the range the *next* access will touch: for consecutive
+      // overlapping compute writes (the resolve copy writing resolved pixels via
+      // a storage buffer - kComputeWrite) the previous range alone does not
+      // guarantee the overlapping bytes the next dispatch rewrites are ordered.
+      // If only the previous range were covered and the next write extended past
+      // it, synchronization validation still saw the second vkCmdDispatch
+      // writing bytes with no covering write barrier (SYNC-HAZARD-
+      // WRITE-AFTER-WRITE, vkCmdDispatch->vkCmdDispatch, write_barriers = 0),
+      // and on drivers that don't implicitly serialize compute writes to the
+      // same buffer (e.g. RADV) the texture cache then sampled order-dependent
+      // garbage (severe texture flicker). Use the union of the previous and the
+      // incoming write range so the overlap is always synchronized, while still
+      // keeping the barrier scoped to the touched region rather than the whole
+      // 512 MB buffer.
+      uint32_t range_begin = last_written_range_.first;
+      uint32_t range_end = last_written_range_.first + last_written_range_.second;
+      if (written_range.second) {
+        // Fold the incoming (non-empty) write range into the covered region.
+        range_begin = std::min(range_begin, written_range.first);
+        range_end = std::max(range_end, written_range.first + written_range.second);
+      }
+      offset = VkDeviceSize(range_begin);
+      size = VkDeviceSize(range_end - range_begin);
     } else {
       // Changing the stage and access mask - all preceding writes must be
       // available not only to the source stage, but to the destination as well.
@@ -411,7 +434,17 @@ void VulkanSharedMemory::GetUsageMasks(Usage usage, VkPipelineStageFlags& stage_
   switch (usage) {
     case Usage::kComputeWrite:
       stage_mask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-      access_mask = VK_ACCESS_SHADER_READ_BIT;
+      // This usage is the resolve copy writing resolved pixels into shared
+      // memory via a storage buffer, so the access is a shader WRITE. Using
+      // SHADER_READ here made every write-after-write self-dependency barrier
+      // emitted by Use() ineffective (the prior write was never made
+      // available), leaving consecutive overlapping resolve copies unordered on
+      // drivers that don't implicitly serialize compute writes to the same
+      // buffer (e.g. RADV). That corrupts the data the texture cache then
+      // samples (severe texture flicker; flagged by synchronization validation
+      // as SYNC-HAZARD-WRITE-AFTER-WRITE, vkCmdDispatch->vkCmdDispatch,
+      // write_barriers = 0, on the shared memory buffer).
+      access_mask = VK_ACCESS_SHADER_WRITE_BIT;
       return;
     case Usage::kTransferDestination:
       stage_mask = VK_PIPELINE_STAGE_TRANSFER_BIT;

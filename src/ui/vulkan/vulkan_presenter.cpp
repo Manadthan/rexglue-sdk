@@ -49,6 +49,17 @@
 REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
                     "Clear render pass during presentation");
 
+#if REX_PLATFORM_MAC
+REXCVAR_DEFINE_INT32(present_mac_max_width, 1920, "UI/Presenter",
+                     "Maximum macOS present (swapchain) width in pixels. The CAMetalLayer "
+                     "drawable is capped to this and Core Animation upscales it to fill the "
+                     "window, so large/Retina/4K displays don't force a huge present buffer. "
+                     "The guest render resolution is unaffected. 0 disables the cap.");
+REXCVAR_DEFINE_INT32(present_mac_max_height, 1080, "UI/Presenter",
+                     "Maximum macOS present (swapchain) height in pixels "
+                     "(see present_mac_max_width). 0 disables the cap.");
+#endif
+
 REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_immediate, true, "UI/Vulkan",
                     "Allow immediate present mode (no vsync)");
 
@@ -1155,6 +1166,42 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
   image_extent.height = std::min(std::max(std::min(requested_height, max_framebuffer_extent.height),
                                           surface_capabilities.minImageExtent.height),
                                  surface_capabilities.maxImageExtent.height);
+#if REX_PLATFORM_MAC
+  // Cap the present/swapchain resolution on macOS. The guest still renders at its
+  // native resolution (e.g. 720p) and is scaled to the swapchain as usual; this
+  // only bounds the on-screen present buffer so a large/Retina/4K display doesn't
+  // force a needlessly huge swapchain. MoltenVK sets the CAMetalLayer drawableSize
+  // to imageExtent and Core Animation upscales that to fill the physical window,
+  // so a capped extent stays consistent with the currentExtent contract above
+  // (no black-screen regression) - on the next frame currentExtent reports the
+  // capped drawable size and the value is preserved. Scaling preserves aspect
+  // ratio so the Core Animation upscale to the (same-aspect) window won't distort.
+  {
+    uint32_t max_present_width = uint32_t(std::max(0, REXCVAR_GET(present_mac_max_width)));
+    uint32_t max_present_height = uint32_t(std::max(0, REXCVAR_GET(present_mac_max_height)));
+    bool over_width = max_present_width && image_extent.width > max_present_width;
+    bool over_height = max_present_height && image_extent.height > max_present_height;
+    if (over_width || over_height) {
+      double scale = 1.0;
+      if (over_width) {
+        scale = std::min(scale, double(max_present_width) / double(image_extent.width));
+      }
+      if (over_height) {
+        scale = std::min(scale, double(max_present_height) / double(image_extent.height));
+      }
+      VkExtent2D capped_extent;
+      capped_extent.width =
+          std::max(uint32_t(1), uint32_t(double(image_extent.width) * scale + 0.5));
+      capped_extent.height =
+          std::max(uint32_t(1), uint32_t(double(image_extent.height) * scale + 0.5));
+      // Don't go below what the surface requires.
+      capped_extent.width = std::max(capped_extent.width, surface_capabilities.minImageExtent.width);
+      capped_extent.height =
+          std::max(capped_extent.height, surface_capabilities.minImageExtent.height);
+      image_extent = capped_extent;
+    }
+  }
+#endif
   if (!image_extent.width || !image_extent.height ||
       image_extent.width > max_framebuffer_extent.width ||
       image_extent.height > max_framebuffer_extent.height) {

@@ -338,6 +338,12 @@ u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buf
     XThread::SetLastError(0x2726);  // WSAEINVAL
     return -1;
   }
+  // Bound the array START too: a null/bogus descriptor base with num_buffers > 0
+  // would otherwise index buffers[i] off an unintended guest region.
+  if (num_buffers && !buffers) {
+    XThread::SetLastError(0x2726);  // WSAEINVAL
+    return -1;
+  }
 
   // Our sockets implementation doesn't support multiple buffers, so we need
   // to combine the buffers the game has given us!

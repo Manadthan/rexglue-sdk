@@ -58,7 +58,14 @@ static std::string ReadGuestPath(mapped_string guest_path) {
   if (!host) {
     return std::string();
   }
-  return std::string(host, strnlen(host, kMaxGuestPathLength));
+  size_t length = strnlen(host, kMaxGuestPathLength);
+  if (length == kMaxGuestPathLength) {
+    // No terminator within MAX_PATH: treat as malformed and fail the call rather
+    // than silently truncating to a 260-byte prefix that could resolve to a
+    // different file. A well-formed Win32 ANSI path always terminates in bound.
+    return std::string();
+  }
+  return std::string(host, length);
 }
 
 static rex::filesystem::FileDisposition MapDisposition(uint32_t win32_disp) {

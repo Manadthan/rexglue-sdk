@@ -330,23 +330,45 @@ u32 NetDll_WSASendTo_entry(u32 caller, u32 socket_handle, ppc_ptr_t<XWSABUF> buf
     return -1;
   }
 
+  // num_buffers and each buffers[i].len are guest-controlled. Bound the
+  // descriptor count so a bogus count can't walk the WSABUF array off the end
+  // of guest memory.
+  constexpr uint32_t kMaxSendBuffers = 64;
+  if (num_buffers > kMaxSendBuffers) {
+    XThread::SetLastError(0x2726);  // WSAEINVAL
+    return -1;
+  }
+
   // Our sockets implementation doesn't support multiple buffers, so we need
   // to combine the buffers the game has given us!
   std::vector<uint8_t> combined_buffer_mem;
-  uint32_t combined_buffer_size = 0;
+  uint64_t combined_buffer_size = 0;
   uint32_t combined_buffer_offset = 0;
   for (uint32_t i = 0; i < num_buffers; i++) {
-    combined_buffer_size += buffers[i].len;
-    combined_buffer_mem.resize(combined_buffer_size);
-    uint8_t* combined_buffer = combined_buffer_mem.data();
+    uint32_t len = buffers[i].len;
+    // Accumulate in 64-bit and refuse a 32-bit wrap: a wrap would shrink the
+    // vector while combined_buffer_offset keeps growing, turning the memcpy
+    // below into a heap overflow.
+    uint64_t next_size = combined_buffer_size + len;
+    if (next_size > UINT32_MAX) {
+      XThread::SetLastError(0x2726);  // WSAEINVAL
+      return -1;
+    }
+    combined_buffer_size = next_size;
+    combined_buffer_mem.resize(static_cast<size_t>(combined_buffer_size));
 
-    std::memcpy(combined_buffer + combined_buffer_offset,
-                REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr), buffers[i].len);
-    combined_buffer_offset += buffers[i].len;
+    // A bad guest pointer would otherwise fault inside memcpy; skip the copy
+    // (leaving that segment zero-filled) instead of dereferencing null.
+    void* src = REX_KERNEL_MEMORY()->TranslateVirtual(buffers[i].buf_ptr);
+    if (src && len) {
+      std::memcpy(combined_buffer_mem.data() + combined_buffer_offset, src, len);
+    }
+    combined_buffer_offset += len;
   }
 
   N_XSOCKADDR_IN native_to(to_ptr);
-  socket->SendTo(combined_buffer_mem.data(), combined_buffer_size, flags, &native_to, to_len);
+  socket->SendTo(combined_buffer_mem.data(), static_cast<uint32_t>(combined_buffer_size), flags,
+                 &native_to, to_len);
 
   // TODO: Instantly complete overlapped
 

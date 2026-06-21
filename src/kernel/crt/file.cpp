@@ -42,6 +42,25 @@ constexpr uint32_t kFileEnd = 2;
 
 constexpr uint32_t kInvalidHandleValue = 0xFFFFFFFF;
 
+// Win32 MAX_PATH -- the limit the ANSI file A-APIs emulated here enforce, and
+// the same cap FillFindData already applies to returned names.
+constexpr size_t kMaxGuestPathLength = 260;
+
+// Materialize a guest path string with a bounded read. The guest memory backing
+// lpFileName may not be NUL-terminated within the mapped region (a truncated or
+// already-freed pointer); consuming it as a bare const char* runs an unbounded
+// strlen -- directly, and again when the VFS builds a std::string_view from it
+// -- straight off the end of guest memory, faulting or reading junk. strnlen
+// bounds the scan, and returning a sized std::string means every downstream
+// string_view conversion uses the known length instead of re-scanning.
+static std::string ReadGuestPath(mapped_string guest_path) {
+  const char* host = static_cast<const char*>(guest_path);
+  if (!host) {
+    return std::string();
+  }
+  return std::string(host, strnlen(host, kMaxGuestPathLength));
+}
+
 static rex::filesystem::FileDisposition MapDisposition(uint32_t win32_disp) {
   using FD = rex::filesystem::FileDisposition;
   switch (win32_disp) {
@@ -63,7 +82,7 @@ static rex::filesystem::FileDisposition MapDisposition(uint32_t win32_disp) {
 u32 CreateFileA_entry(mapped_string lpFileName, u32 dwDesiredAccess, u32 dwShareMode,
                       mapped_void lpSecurityAttributes, u32 dwCreationDisposition,
                       u32 dwFlagsAndAttributes, u32 hTemplateFile) {
-  const char* path = static_cast<const char*>(lpFileName);
+  const std::string path = ReadGuestPath(lpFileName);
   auto* ks = REX_KERNEL_STATE();
   auto disposition = MapDisposition(static_cast<uint32_t>(dwCreationDisposition));
 
@@ -226,7 +245,7 @@ u32 FlushFileBuffers_entry(u32 hFile) {
 }
 
 u32 DeleteFileA_entry(mapped_string lpFileName) {
-  const char* path = static_cast<const char*>(lpFileName);
+  const std::string path = ReadGuestPath(lpFileName);
   bool ok = REX_KERNEL_FS()->DeletePath(path);
   if (!ok)
     REXKRNL_NOISY_DEBUG("rexcrt_DeleteFileA: FAILED '{}'", path);
@@ -271,7 +290,7 @@ static void FillFindData(mapped_void lpFindFileData, rex::filesystem::Entry* ent
 }
 
 u32 FindFirstFileA_entry(mapped_string lpFileName, mapped_void lpFindFileData) {
-  const char* path = static_cast<const char*>(lpFileName);
+  const std::string path = ReadGuestPath(lpFileName);
   auto dir = rex::string::utf8_find_base_guest_path(path);
   auto pattern = rex::string::utf8_find_name_from_guest_path(path);
 
@@ -320,14 +339,14 @@ u32 FindClose_entry(u32 hFindFile) {
 }
 
 u32 CreateDirectoryA_entry(mapped_string lpPathName, mapped_void lpSecurityAttributes) {
-  const char* path = static_cast<const char*>(lpPathName);
+  const std::string path = ReadGuestPath(lpPathName);
   auto* entry = REX_KERNEL_FS()->CreatePath(path, rex::filesystem::kFileAttributeDirectory);
   return entry ? 1u : 0u;
 }
 
 u32 MoveFileA_entry(mapped_string lpExistingFileName, mapped_string lpNewFileName) {
-  const char* src = static_cast<const char*>(lpExistingFileName);
-  const char* dst = static_cast<const char*>(lpNewFileName);
+  const std::string src = ReadGuestPath(lpExistingFileName);
+  const std::string dst = ReadGuestPath(lpNewFileName);
 
   auto* fs = REX_KERNEL_FS();
   auto* src_entry = fs->ResolvePath(src);
@@ -358,7 +377,7 @@ u32 SetFileAttributesA_entry(mapped_string lpFileName, u32 dwFileAttributes) {
 }
 
 u32 GetFileAttributesA_entry(mapped_string lpFileName) {
-  const char* path = static_cast<const char*>(lpFileName);
+  const std::string path = ReadGuestPath(lpFileName);
   auto* entry = REX_KERNEL_FS()->ResolvePath(path);
   if (!entry) {
     REXKRNL_DEBUG("rexcrt_GetFileAttributesA: not found '{}'", path);
@@ -370,7 +389,7 @@ u32 GetFileAttributesA_entry(mapped_string lpFileName) {
 
 u32 GetFileAttributesExA_entry(u32 fInfoLevelId, mapped_string lpFileName,
                                mapped_void lpFileInformation) {
-  const char* path = static_cast<const char*>(lpFileName);
+  const std::string path = ReadGuestPath(lpFileName);
   auto* entry = REX_KERNEL_FS()->ResolvePath(path);
   if (!entry) {
     REXKRNL_DEBUG("rexcrt_GetFileAttributesExA: not found '{}'", path);
@@ -457,8 +476,8 @@ u32 CompareFileTime_entry(mapped_void lpFileTime1, mapped_void lpFileTime2) {
 
 u32 CopyFileA_entry(mapped_string lpExistingFileName, mapped_string lpNewFileName,
                     u32 bFailIfExists) {
-  const char* src = static_cast<const char*>(lpExistingFileName);
-  const char* dst = static_cast<const char*>(lpNewFileName);
+  const std::string src = ReadGuestPath(lpExistingFileName);
+  const std::string dst = ReadGuestPath(lpNewFileName);
 
   auto* ks = REX_KERNEL_STATE();
 
@@ -514,7 +533,7 @@ u32 CopyFileA_entry(mapped_string lpExistingFileName, mapped_string lpNewFileNam
 }
 
 u32 RemoveDirectoryA_entry(mapped_string lpPathName) {
-  const char* path = static_cast<const char*>(lpPathName);
+  const std::string path = ReadGuestPath(lpPathName);
   bool ok = REX_KERNEL_FS()->DeletePath(path);
   if (!ok)
     REXKRNL_DEBUG("rexcrt_RemoveDirectoryA: FAILED '{}'", path);
@@ -532,7 +551,7 @@ u32 GetDiskFreeSpaceExA_entry(mapped_string lpDirectoryName,
                               mapped_void lpFreeBytesAvailableToCaller,
                               mapped_void lpTotalNumberOfBytes,
                               mapped_void lpTotalNumberOfFreeBytes) {
-  const char* path = static_cast<const char*>(lpDirectoryName);
+  const std::string path = ReadGuestPath(lpDirectoryName);
   auto* entry = REX_KERNEL_FS()->ResolvePath(path);
   if (!entry) {
     REXKRNL_DEBUG("rexcrt_GetDiskFreeSpaceExA: path not found '{}'", path);

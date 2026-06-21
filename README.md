@@ -1,6 +1,12 @@
 > [!CAUTION]
 > This project is in early development. Expect things to not work quite right and there to be significant changes and breaking public API updates as development progresses. Contributions and feedback are welcome, but please be aware that the codebase is still evolving rapidly.
 
+> ⚠️ **Disclaimer — this fork is built with heavy use of AI.** The changes on this fork
+> (recompiler/runtime work, platform ports, tooling, and documentation) were developed
+> largely with the assistance of AI coding tools (large language models). It's a hobby
+> fork: verify things yourself before relying on them, and expect rough edges. No
+> warranty (see [LICENSE](LICENSE)).
+
 <h1 align="center">
   <br>
   <a href="https://github.com/rexglue/rexglue-sdk">

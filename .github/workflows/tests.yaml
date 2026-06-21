@@ -1,13 +1,13 @@
 name: Tests
 
 # Build with REXGLUE_BUILD_TESTS=ON and run the Catch2 suite (unit + PPC
-# instruction tests) via ctest. Gates main + PRs and is manually dispatchable.
-# (Scoped to main rather than every push so wip/feature-branch pushes aren't
-# taxed with a full build; the PPC toolchain is vendored in tools/binutils.)
+# instruction tests) via ctest. Runs NIGHTLY + on manual dispatch: a full
+# from-scratch SDK build on the 2-core runner takes ~50-70 min, so gating every
+# push on it is impractical; nightly keeps it non-blocking and dispatch lets you
+# verify a specific ref on demand. The PPC toolchain is vendored in tools/binutils.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: "0 7 * * *"
   workflow_dispatch: {}
 
 jobs:

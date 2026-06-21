@@ -1195,7 +1195,8 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
       capped_extent.height =
           std::max(uint32_t(1), uint32_t(double(image_extent.height) * scale + 0.5));
       // Don't go below what the surface requires.
-      capped_extent.width = std::max(capped_extent.width, surface_capabilities.minImageExtent.width);
+      capped_extent.width =
+          std::max(capped_extent.width, surface_capabilities.minImageExtent.width);
       capped_extent.height =
           std::max(capped_extent.height, surface_capabilities.minImageExtent.height);
       image_extent = capped_extent;

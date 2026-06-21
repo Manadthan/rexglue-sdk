@@ -139,6 +139,14 @@ uint32_t ReXHeap::Realloc(uint32_t guest_addr, uint32_t new_size, bool zero_new)
   if (new_size == 0)
     new_size = 1;
 
+  // Same overflow guard as AllocLocked: a (new_size + kHeaderSize) wrap would
+  // shrink the o1heap request while the header records the huge size, leading
+  // to out-of-bounds access on the returned block.
+  if (new_size > UINT32_MAX - kHeaderSize) {
+    REXKRNL_WARN("rexcrt_RtlReAllocateHeap: rejecting oversized realloc of {} bytes", new_size);
+    return 0;
+  }
+
   auto* segment = FindSegmentByGuestLocked(guest_addr);
   if (!segment || guest_addr < segment->guest_base + kHeaderSize) {
     // Pre-hook allocation outside our heap -- treat as fresh alloc.
@@ -237,6 +245,16 @@ bool ReXHeap::AllocateSegmentLocked(uint32_t segment_size_bytes) {
 uint32_t ReXHeap::AllocLocked(uint32_t size, bool zero) {
   if (size == 0) {
     size = 1;
+  }
+
+  // Reject sizes that cannot fit the prepended SizeHeader without wrapping the
+  // 32-bit add below. A wrap would yield a tiny o1heap block whose stored
+  // requested_size is the full huge value, turning the HEAP_ZERO_MEMORY memset
+  // into a ~4GB out-of-bounds write. No legitimate single guest allocation is
+  // this large -- fail it the same way an OOM does.
+  if (size > UINT32_MAX - kHeaderSize) {
+    REXKRNL_WARN("rexcrt_RtlAllocateHeap: rejecting oversized allocation of {} bytes", size);
+    return 0;
   }
 
   const uint32_t alloc_size = size + kHeaderSize;

@@ -12,6 +12,8 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <cstring>
+
 #include <rex/dbg.h>
 #include <rex/kernel/xboxkrnl/private.h>
 #include <rex/logging.h>
@@ -58,8 +60,16 @@ void HandleSetThreadName(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
 
   // TODO(gibbed): cvar for thread name encoding for conversion, some games use
   // SJIS and there's no way to automatically know this.
-  auto name =
-      std::string(REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(thread_info->name_ptr));
+  // name_ptr is a raw guest C string. Per the note above, some games pass freed
+  // or uninitialized memory here, which may not be NUL-terminated within the
+  // mapped region. Constructing a std::string directly would run an unbounded
+  // strlen off the end of guest memory -> reads junk/unmapped memory and corrupts
+  // the heap (intermittent SIGABRT at startup). Bound the read with strnlen; a
+  // 256-byte cap never truncates a real thread name (the consumer clamps to 15).
+  constexpr size_t kMaxThreadNameLength = 256;
+  const char* name_guest =
+      REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(thread_info->name_ptr);
+  auto name = std::string(name_guest, strnlen(name_guest, kMaxThreadNameLength));
   std::replace_if(name.begin(), name.end(), [](auto c) { return c < 32 || c > 127; }, '?');
 
   object_ref<XThread> thread;

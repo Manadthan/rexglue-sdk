@@ -1125,11 +1125,34 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
   // device, and the minimum swap chain size on the whole instance - fail to
   // create until the surface becomes smaller).
   VkExtent2D max_framebuffer_extent = util::GetMax2DFramebufferExtent(vulkan_device->properties());
+  // When the surface dictates a fixed size (currentExtent is not the special
+  // 0xFFFFFFFF "size determined by the swapchain" sentinel), the swapchain image
+  // extent MUST equal currentExtent. The Vulkan WSI spec requires this, and
+  // MoltenVK enforces it strictly: currentExtent reflects the CAMetalLayer's
+  // current drawable size, and creating a swapchain that doesn't match it yields
+  // a drawable that never composites - a black screen.
+  //
+  // This matters on macOS fullscreen toggles: the window-reported pixel size
+  // (`width`/`height`, from SDL_GetWindowSizeInPixels) momentarily LEADS the
+  // layer's actual drawable size during the asynchronous Cocoa fullscreen
+  // animation. Trusting the requested size during that window builds a swapchain
+  // that mismatches the layer -> black until the next resize event happens to
+  // catch them in sync (hence the intermittent "toggle again to recover").
+  // Honoring currentExtent makes the existing SUBOPTIMAL/OUT_OF_DATE -> recreate
+  // loop converge on its own. Only fall back to the requested size for the
+  // 0xFFFFFFFF sentinel (e.g. Wayland, where the app picks the size).
+  uint32_t requested_width = width;
+  uint32_t requested_height = height;
+  if (surface_capabilities.currentExtent.width != UINT32_MAX &&
+      surface_capabilities.currentExtent.height != UINT32_MAX) {
+    requested_width = surface_capabilities.currentExtent.width;
+    requested_height = surface_capabilities.currentExtent.height;
+  }
   VkExtent2D image_extent;
-  image_extent.width = std::min(std::max(std::min(width, max_framebuffer_extent.width),
+  image_extent.width = std::min(std::max(std::min(requested_width, max_framebuffer_extent.width),
                                          surface_capabilities.minImageExtent.width),
                                 surface_capabilities.maxImageExtent.width);
-  image_extent.height = std::min(std::max(std::min(height, max_framebuffer_extent.height),
+  image_extent.height = std::min(std::max(std::min(requested_height, max_framebuffer_extent.height),
                                           surface_capabilities.minImageExtent.height),
                                  surface_capabilities.maxImageExtent.height);
   if (!image_extent.width || !image_extent.height ||

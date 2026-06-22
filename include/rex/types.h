@@ -281,6 +281,14 @@ class MappedPtr<void> {
 // MappedPtr<char> Specialization (strings)
 //=============================================================================
 
+// Upper bound for scanning a NUL terminator in guest-backed strings. Guest
+// memory is attacker/garbage-controlled and may not be terminated within the
+// mapped region, so an unbounded strlen on value() can run off the end of guest
+// memory (fault or read junk). 32 KB is far beyond any legitimate Xbox guest
+// string (paths cap at 260, gamertags/content names are tens of bytes) while
+// bounding a runaway scan.
+inline constexpr size_t kMaxGuestStringScan = 0x8000;
+
 template <>
 class MappedPtr<char> {
   char* host_ptr_;
@@ -298,7 +306,9 @@ class MappedPtr<char> {
   explicit operator bool() const { return host_ptr_ != nullptr; }
 
   std::string_view value() const {
-    return host_ptr_ ? std::string_view(host_ptr_) : std::string_view();
+    // Bound the terminator scan; see kMaxGuestStringScan.
+    return host_ptr_ ? std::string_view(host_ptr_, strnlen(host_ptr_, kMaxGuestStringScan))
+                     : std::string_view();
   }
 
   char* operator->() const { return host_ptr_; }
@@ -340,7 +350,16 @@ class MappedPtr<char16_t> {
   explicit operator bool() const { return host_ptr_ != nullptr; }
 
   std::u16string_view value() const {
-    return host_ptr_ ? std::u16string_view(host_ptr_) : std::u16string_view();
+    if (!host_ptr_) {
+      return std::u16string_view();
+    }
+    // No strnlen for char16_t; bound the NUL scan manually. See
+    // kMaxGuestStringScan.
+    size_t length = 0;
+    while (length < kMaxGuestStringScan && host_ptr_[length] != u'\0') {
+      ++length;
+    }
+    return std::u16string_view(host_ptr_, length);
   }
 
   char16_t* operator->() const { return host_ptr_; }

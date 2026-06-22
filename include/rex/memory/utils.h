@@ -232,7 +232,12 @@ inline T load_and_swap(const void* mem) {
 template <>
 inline std::string load_and_swap<std::string>(const void* mem) {
   std::string value;
-  for (int i = 0;; ++i) {
+  // mem points at guest-controlled memory that may not be NUL-terminated within
+  // its mapped region; the original unbounded scan could run off the end (fault
+  // or read junk), and the signed `int` counter was UB on overflow. Bound the
+  // scan to kMaxGuestStringScan (same 32 KB cap as MappedPtr::value()) with a
+  // size_t index -- any legitimate Xbox guest string terminates far below it.
+  for (size_t i = 0; i < kMaxGuestStringScan; ++i) {
     auto c = load_and_swap<uint8_t>(reinterpret_cast<const uint8_t*>(mem) + i);
     if (!c) {
       break;
@@ -244,7 +249,9 @@ inline std::string load_and_swap<std::string>(const void* mem) {
 template <>
 inline std::u16string load_and_swap<std::u16string>(const void* mem) {
   std::u16string value;
-  for (int i = 0;; ++i) {
+  // Same bounded scan as the std::string specialization above; see
+  // kMaxGuestStringScan.
+  for (size_t i = 0; i < kMaxGuestStringScan; ++i) {
     auto c = load_and_swap<uint16_t>(reinterpret_cast<const uint16_t*>(mem) + i);
     if (!c) {
       break;

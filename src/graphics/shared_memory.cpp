@@ -128,6 +128,17 @@ void SharedMemory::SetSystemPageBlocksValidWithGpuDataWritten() {
     return;
   }
 
+  // This runs on the GPU command-processor worker thread at frame close, while
+  // the guest-CPU thread mutates the same page-validity structures from
+  // MemoryInvalidationCallback under global_critical_region_. The non-atomic
+  // read of system_page_flags_valid_and_gpu_written_ and the active/staging
+  // pointer swap below must be serialized against that writer, otherwise the
+  // swap can land mid-callback and drop validity bits (the RADV/Steam-Deck
+  // texture-flicker mechanism). The header documents these members as fully
+  // protected by global_critical_region_; honor that here. The region is a
+  // recursive mutex, so re-entrancy is safe.
+  auto global_lock = global_critical_region_.Acquire();
+
   uint64_t* staging = staging_valid_flags_.load(std::memory_order_acquire);
   if (!staging || !num_system_page_flags_) {
     gpu_written_data_dirty_.store(false, std::memory_order_relaxed);

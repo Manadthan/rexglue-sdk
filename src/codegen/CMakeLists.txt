@@ -117,11 +117,16 @@ target_include_directories(rexcodegen
 
 target_link_libraries(rexcodegen
     PUBLIC
-        rexcore
         rexruntime
         fmt::fmt
         spdlog::spdlog
     PRIVATE
+        # rexcore is an OBJECT lib already baked into librexruntime.so. Keep it
+        # PRIVATE so consumers (rexglue, unit_tests) don't compile a 2nd copy of
+        # its globals -> that duplicate is what double-registered cvars and broke
+        # unit_tests' Catch2 discovery. rexcore *symbols* resolve via the PUBLIC
+        # rexruntime; rexcore *headers* via this target's PUBLIC include/ above.
+        rexcore
         tomlplusplus
         disasm
         xxHash::xxhash

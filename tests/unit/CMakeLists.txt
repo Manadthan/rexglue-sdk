@@ -32,7 +32,11 @@ target_include_directories(unit_tests PRIVATE
 )
 
 target_link_libraries(unit_tests PRIVATE
-    rexcore
+    # Do NOT link the rexcore OBJECT lib directly: it is already baked into
+    # librexruntime.so. A direct link compiles a 2nd copy of its globals here ->
+    # static initializers run twice -> cvar double-registration -> startup segfault.
+    # Resolve rexcore symbols via rexruntime instead. (rexcodegen is a separate
+    # STATIC lib that genuinely provides the codegen symbols the tests need.)
     rexcodegen
     rexruntime
     Catch2::Catch2WithMain

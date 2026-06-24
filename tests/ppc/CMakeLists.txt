@@ -63,8 +63,11 @@ target_include_directories(ppc_tests PRIVATE
 
 target_link_libraries(ppc_tests PRIVATE
     simde
+    # rexruntime (SHARED) already bakes in the rexcore OBJECT lib and exports its
+    # symbols. Do NOT also link rexcore directly: that compiles a 2nd copy of its
+    # globals into this exe, so static initializers run twice (e.g. cvar registry
+    # self-registration) -> duplicate registration -> segfault at startup.
     rexruntime
-    rexcore
     fmt::fmt
     Catch2::Catch2WithMain
 )

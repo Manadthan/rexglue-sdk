@@ -28,7 +28,14 @@ jobs:
     name: Commit identity (springah/noreply)
     runs-on: ubuntu-latest
     steps:
+      # On pull_request events the default checkout is GitHub's synthetic merge
+      # commit (committer noreply@github.com, author the PR opener's public
+      # email), which can never satisfy this guard. Check out the real PR head
+      # commit instead; on push events github.event.pull_request is empty so we
+      # fall back to the pushed SHA.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reject non-springah author/committer on HEAD
         run: |
           ok="321120+springah@users.noreply.github.com"

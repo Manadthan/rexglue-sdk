@@ -28,17 +28,30 @@ jobs:
     name: Commit identity (springah/noreply)
     runs-on: ubuntu-latest
     steps:
+      # On pull_request events the default checkout is GitHub's synthetic merge
+      # commit (committer noreply@github.com, author the PR opener's public
+      # email), which can never satisfy this guard. Check out the real PR head
+      # commit instead; on push events github.event.pull_request is empty so we
+      # fall back to the pushed SHA.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Reject non-springah author/committer on HEAD
         run: |
-          ok="321120+springah@users.noreply.github.com"
+          # Allowed identities. The canonical springah noreply covers normal
+          # (content) commits. GitHub's merge bot (noreply@github.com) is also
+          # accepted so PRs can be landed with the GitHub "Merge" button -- it
+          # stamps the merge commit's committer (and sometimes author) as the
+          # bot, which is mechanical attribution, not authored content.
+          ok_springah="321120+springah@users.noreply.github.com"
+          ok_ghbot="noreply@github.com"
           fail=0
           for role in ae ce; do
             e="$(git log -1 --format="%${role}")"
-            if [ "$e" != "$ok" ]; then
-              echo "::error::HEAD ${role} email '$e' is not $ok"
+            if [ "$e" != "$ok_springah" ] && [ "$e" != "$ok_ghbot" ]; then
+              echo "::error::HEAD ${role} email '$e' is not allowed (${ok_springah} or ${ok_ghbot})"
               fail=1
             fi
           done
-          [ "$fail" -eq 0 ] && echo "identity OK: $ok"
+          [ "$fail" -eq 0 ] && echo "identity OK"
           exit $fail

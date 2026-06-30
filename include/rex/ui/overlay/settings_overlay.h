@@ -14,6 +14,10 @@
 #include <string>
 #include <rex/ui/imgui_dialog.h>
 
+namespace rex::cvar {
+struct FlagEntry;
+}
+
 namespace rex::ui {
 
 class SettingsDialog : public ImGuiDialog {
@@ -30,12 +34,18 @@ class SettingsDialog : public ImGuiDialog {
   // above the generic cvar list when the root category is selected.
   void DrawDisplaySection();
 
+  // Render one settings row into the currently-open 2-column table.
+  // DrawCvarRow handles the generic value widget (+ modified marker / Reset);
+  // DrawKeybindRow handles key capture, rebind/reset, and conflict detection.
+  void DrawCvarRow(const rex::cvar::FlagEntry& entry);
+  void DrawKeybindRow(const rex::cvar::FlagEntry& entry);
+
   std::filesystem::path config_path_;
   char search_buf_[128] = {};
   std::string selected_category_;
   std::string capturing_bind_name_;
   // Why the last captured key was rejected (already bound elsewhere); shown
-  // next to the capture button until a free key is pressed or capture ends.
+  // below the capture button until a free key is pressed or capture ends.
   std::string capture_conflict_;
 };
 

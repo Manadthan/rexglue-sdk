@@ -40,6 +40,13 @@
 REXCVAR_DEFINE_STRING(render_target_path_vulkan, "", "GPU/Vulkan",
                       "Vulkan render target implementation path")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(
+    vulkan_defer_edram_dump_barrier, false, "GPU/Vulkan",
+    "Commit a single EDRAM write-after-write barrier after all render targets are dumped (matching "
+    "the D3D12 backend) instead of one per render target. Lets the dump compute dispatches overlap "
+    "for higher GPU occupancy on RDNA2, but is only correct when the dumped render targets occupy "
+    "disjoint EDRAM tile ranges - A/B on RADV and watch for texture flicker before relying on it.")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 // DEFINE_string(
 //     render_target_path_vulkan, "",
@@ -6290,6 +6297,16 @@ bool VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dum
   DumpOffsets last_offsets;
   bool pitches_bound = false, offsets_bound = false;
   bool all_pipelines_available = true;
+  // By default a write-after-write self-dependency barrier is committed after
+  // every render target (see the comment at the bottom of the loop) because
+  // successive dumps and the following resolve copy may touch overlapping EDRAM
+  // tiles on drivers without implicit compute serialization (RADV). When
+  // vulkan_defer_edram_dump_barrier is set, the barrier is instead committed
+  // once after all dumps - matching the D3D12 backend, which lets the dump
+  // dispatches overlap for higher occupancy. Correct only when the dumped
+  // render targets occupy disjoint EDRAM tile ranges, so it is gated/off by
+  // default.
+  const bool defer_edram_dump_barrier = REXCVAR_GET(vulkan_defer_edram_dump_barrier);
   for (const DumpInvocation& invocation : dump_invocations_) {
     const ResolveCopyDumpRectangle& rectangle = invocation.rectangle;
     auto& vulkan_rt = *static_cast<VulkanRenderTarget*>(rectangle.render_target);
@@ -6375,8 +6392,16 @@ bool VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dum
     // (observed as severe texture flicker; flagged by synchronization
     // validation as SYNC-HAZARD-WRITE-AFTER-WRITE, vkCmdDispatch->vkCmdDispatch,
     // write_barriers = 0). Mark and immediately commit so the barrier is placed
-    // before the next render target's dispatches.
+    // before the next render target's dispatches (unless deferred to a single
+    // post-loop barrier - see vulkan_defer_edram_dump_barrier above).
     MarkEdramBufferModified();
+    if (!defer_edram_dump_barrier) {
+      CommitEdramBufferShaderWrites();
+    }
+  }
+  if (defer_edram_dump_barrier) {
+    // One write-after-write barrier covering every render target dumped above,
+    // placed before the resolve copy reads the EDRAM buffer.
     CommitEdramBufferShaderWrites();
   }
   return all_pipelines_available;

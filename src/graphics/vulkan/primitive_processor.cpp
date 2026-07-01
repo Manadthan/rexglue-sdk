@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 
 #include <rex/assert.h>
 #include <rex/graphics/flags.h>
@@ -34,6 +35,15 @@ REXCVAR_DEFINE_BOOL(vulkan_force_convert_quad_lists_to_triangle_lists, false, "G
                     "Force Vulkan quad list conversion to triangle lists in primitive processing, "
                     "even when geometry shaders are available")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(
+    vulkan_primitive_vs_expansion, 0, "GPU/Vulkan",
+    "Expand Xenos point sprites, rectangle lists and quad lists in the vertex shader instead of "
+    "using geometry shaders, to avoid the low-occupancy legacy geometry-shader path on RDNA2. "
+    "0 = off (use geometry shaders where the host supports them), 1 = auto (force vertex-shader "
+    "expansion only on the Steam Deck APU - RADV Van Gogh/Sephiroth), 2 = force on for every "
+    "device (correctness / A-B testing on a non-Deck GPU).")
+    .range(0, 2)
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex::graphics::vulkan {
 
@@ -49,17 +59,47 @@ bool VulkanPrimitiveProcessor::Initialize() {
   constexpr bool triangle_fans_supported_without_conversion = false;
 
   // Default to D3D12-like geometry-shader-based handling when available, but
-  // allow opting into Vulkan fallback paths for debugging and downlevel
-  // compatibility testing.
+  // allow opting into Vulkan vertex-shader expansion fallbacks for the Xenos
+  // primitive types that would otherwise be emulated with a geometry shader
+  // (point sprites, rectangle lists, quad lists).
   bool geometry_shader_primitive_emulation_allowed = device_properties.geometryShader;
+
+  // On RDNA2 - notably the Steam Deck "Van Gogh" APU - the legacy geometry-shader
+  // path used for those primitives runs at very low wavefront occupancy (the GPU
+  // is starved rather than busy), so expanding them in the vertex shader instead
+  // can claw back GPU headroom. vulkan_primitive_vs_expansion gates this:
+  //   0 = off  : use geometry shaders where the host supports them (default).
+  //   1 = auto : force vertex-shader expansion only on the Steam Deck APU,
+  //              detected by the RADV marketing name (as in the tessellation
+  //              workaround in the command processor), leaving desktop GPUs on
+  //              the geometry-shader path.
+  //   2 = on   : force vertex-shader expansion on every device (correctness /
+  //              A-B testing on a dev box that is not the Deck).
+  // The per-type force_* cvars below still apply independently of this aggregate.
+  bool force_vs_primitive_expansion = false;
+  {
+    const int32_t mode = REXCVAR_GET(vulkan_primitive_vs_expansion);
+    const std::string_view device_name(device_properties.deviceName);
+    const bool is_steam_deck_apu = device_name.find("VANGOGH") != std::string_view::npos ||
+                                   device_name.find("SEPHIROTH") != std::string_view::npos;
+    force_vs_primitive_expansion = (mode == 2) || (mode == 1 && is_steam_deck_apu);
+    if (force_vs_primitive_expansion) {
+      REXGPU_INFO(
+          "Expanding Xenos point/rectangle/quad primitives in the vertex shader instead of "
+          "geometry shaders on \"{}\" (low-occupancy-GS workaround; vulkan_primitive_vs_expansion="
+          "{}).",
+          device_properties.deviceName, mode);
+    }
+  }
+
   bool quad_lists_supported_without_conversion =
-      geometry_shader_primitive_emulation_allowed &&
+      geometry_shader_primitive_emulation_allowed && !force_vs_primitive_expansion &&
       !REXCVAR_GET(vulkan_force_convert_quad_lists_to_triangle_lists);
   bool point_sprites_supported_without_vs_expansion =
-      geometry_shader_primitive_emulation_allowed &&
+      geometry_shader_primitive_emulation_allowed && !force_vs_primitive_expansion &&
       !REXCVAR_GET(vulkan_force_expand_point_sprites_in_vs);
   bool rectangle_lists_supported_without_vs_expansion =
-      geometry_shader_primitive_emulation_allowed &&
+      geometry_shader_primitive_emulation_allowed && !force_vs_primitive_expansion &&
       !REXCVAR_GET(vulkan_force_expand_rectangle_lists_in_vs);
 
   if (!InitializeCommon(

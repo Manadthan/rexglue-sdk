@@ -392,7 +392,7 @@ void SettingsDialog::DrawCvarRow(const rex::cvar::FlagEntry& entry) {
     }
     case rex::cvar::FlagType::Command: {
       if (ImGui::Button("Run##v", ImVec2(-FLT_MIN, 0.0f)))
-        entry.command_callback();
+        entry.command_callback("");
       break;
     }
   }

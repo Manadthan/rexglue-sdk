@@ -9,12 +9,14 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 #include <fmt/format.h>
-
 #include <rex/assert.h>
+#include <rex/image_info.h>
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/ppc/function.h>
@@ -29,6 +31,7 @@
 #include <chrono>
 #include <thread>
 
+#include <rex/system/flags.h>
 #include <rex/system/guest_path.h>
 #include <rex/system/user_module.h>
 #include <rex/system/xevent.h>
@@ -249,6 +252,66 @@ util::XdbfGameData KernelState::module_xdbf(object_ref<UserModule> exec_module) 
     return db;
   }
   return util::XdbfGameData(nullptr, resource_size);
+}
+
+void KernelState::SetLoadedAchievements(std::vector<AchievementInfo> achievements) {
+  achievement_manager_.ReplaceAchievements(std::move(achievements));
+}
+
+AchievementListenerHandle KernelState::RegisterAchievementUnlockCallback(
+    AchievementUnlockCallback cb) {
+  return achievement_manager_.RegisterUnlockCallback(
+      [cb = std::move(cb)](const AchievementEvent& event) { cb(event.achievement); });
+}
+
+void KernelState::UnlockAchievement(uint32_t id) {
+  (void)achievement_manager_.UnlockAchievement(id, AchievementNotification::kShow);
+}
+
+bool KernelState::IsAchievementUnlocked(uint32_t id) const {
+  return achievement_manager_.IsUnlocked(id);
+}
+
+uint64_t KernelState::GetAchievementUnlockTime(uint32_t id) const {
+  return achievement_manager_.GetUnlockTime(id);
+}
+
+std::vector<AchievementInfo> KernelState::loaded_achievements() const {
+  return achievement_manager_.ListAchievements();
+}
+
+void KernelState::LoadAchievementsData() {
+  std::vector<AchievementInfo> achievements;
+
+  const util::XdbfGameData db = title_xdbf();
+  if (db.is_valid()) {
+    const XLanguage language =
+        db.GetExistingLanguage(static_cast<XLanguage>(REXCVAR_GET(user_language)));
+    for (const auto& entry : db.GetAchievements()) {
+      AchievementInfo info;
+      info.id = entry.id;
+      info.label = db.GetStringTableEntry(language, entry.label_id);
+      info.description = db.GetStringTableEntry(language, entry.description_id);
+      info.unachieved_description = db.GetStringTableEntry(language, entry.unachieved_id);
+      info.image_id = entry.image_id;
+      info.gamerscore = entry.gamerscore;
+      info.flags = entry.flags;
+      achievements.push_back(std::move(info));
+    }
+  }
+
+  SetLoadedAchievements(std::move(achievements));
+  if (auto metadata_path = emulator_->FindMetadataPath("achievements.toml")) {
+    achievement_manager_.LoadMetadataFile(*metadata_path);
+  }
+
+  // Set up the unlock save path and restore persisted state.
+  const auto user_root = emulator_->user_data_root();
+  if (!user_root.empty()) {
+    achievement_manager_.SetUnlockSavePath(user_root / "achievements" /
+                                           fmt::format("{:08X}.toml", title_id()));
+    achievement_manager_.LoadUnlockState();
+  }
 }
 
 uint32_t KernelState::process_type() const {
@@ -622,6 +685,8 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
       REX_FATAL("Failed to create kernel dispatch thread (status {:#x})", create_status);
     }
   }
+
+  LoadAchievementsData();
 }
 
 void KernelState::LoadKernelModule(object_ref<KernelModule> kernel_module) {
@@ -700,18 +765,32 @@ object_ref<UserModule> KernelState::LoadUserModule(const std::string_view raw_na
     } else {
       auto register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(
           library_local.GetRawSymbol("ReXModule_Register"));
+      using GetImageInfoFn = const rex::PPCImageInfo* (*)();
+      auto get_image_info =
+          reinterpret_cast<GetImageInfoFn>(library_local.GetRawSymbol("ReXModule_GetImageInfo"));
       if (!register_func) {
         REXSYS_ERROR("ReXModule_Register not found in '{}'", recomp->shared_lib_name);
+      } else if (!get_image_info) {
+        REXSYS_ERROR("ReXModule_GetImageInfo not found in '{}'", recomp->shared_lib_name);
       } else {
         auto* xex = module->xex_module();
-        auto* text = xex->GetPESection(".text");
-        if (!text) {
-          REXSYS_ERROR("Module '{}' has no .text section", recomp->pe_name);
+        const auto* image_info = get_image_info();
+        if (!image_info) {
+          REXSYS_ERROR("ReXModule_GetImageInfo returned null for '{}'", recomp->shared_lib_name);
+        } else if (image_info->image_base != xex->base_address() ||
+                   image_info->image_size != xex->image_size()) {
+          REXSYS_ERROR(
+              "Recompiled module '{}' layout does not match loaded XEX "
+              "(DLL image={:08X}-{:08X}, XEX image={:08X}-{:08X})",
+              recomp->pe_name, image_info->image_base,
+              image_info->image_base + image_info->image_size, xex->base_address(),
+              xex->base_address() + xex->image_size());
         } else if (!function_dispatcher_->InitializeFunctionTable(
-                       text->address, text->size, xex->base_address(), xex->image_size())) {
+                       image_info->code_base, image_info->code_size, image_info->image_base,
+                       image_info->image_size)) {
           REXSYS_ERROR("InitializeFunctionTable failed for module '{}'", recomp->pe_name);
         } else {
-          function_dispatcher_->RegisterModule(lib_key, text->address, register_func);
+          function_dispatcher_->RegisterModule(lib_key, image_info->code_base, register_func);
           auto global_lock = global_critical_region_.Acquire();
           auto lib_it = module_libraries_.find(lib_key);
           assert_true(lib_it != module_libraries_.end());

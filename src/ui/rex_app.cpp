@@ -13,28 +13,26 @@
 
 #include <cstdlib>
 
+#include <rex/assert.h>
 #include <rex/cvar.h>
 #include <rex/ui/flags.h>
 #include <rex/kernel/crt/heap.h>
 #include <rex/filesystem.h>
 #include <rex/logging/sink.h>
 #include <rex/logging.h>
+#include <rex/ui/overlay/achievement_toast.h>
+#include <rex/ui/overlay/achievements_overlay.h>
 #include <rex/ui/overlay/console_overlay.h>
 #include <rex/ui/overlay/debug_overlay.h>
 #include <rex/ui/overlay/settings_overlay.h>
 #include <rex/ui/overlay/toast_overlay.h>
-#include <rex/graphics/graphics_system.h>
-#if REX_HAS_VULKAN
-#include <rex/graphics/vulkan/graphics_system.h>
-#endif
-#if REX_HAS_D3D12
-#include <rex/graphics/d3d12/graphics_system.h>
-#endif
 #include <rex/audio/audio_system.h>
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/input/input_system.h>
 #include <rex/kernel/init.h>
 #include <rex/system.h>
+#include <rex/system/achievement_manager.h>
+#include <rex/system/gpu_plugin.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
@@ -48,6 +46,11 @@
 #include <filesystem>
 #include <string_view>
 
+REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
+                      "GPU emulation plugin to load at startup (e.g. 'xenos'); empty disables "
+                      "GPU emulation")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(show_startup_hints, true, "UI",
                     "Show keyboard shortcut hints (settings, fullscreen) briefly at startup");
 
@@ -60,6 +63,28 @@ ReXApp::~ReXApp() = default;
 ReXApp::ReXApp(ui::WindowedAppContext& ctx, std::string_view name, PPCImageInfo ppc_info,
                std::string_view usage)
     : WindowedApp(ctx, name, usage), ppc_info_(ppc_info) {}
+
+std::unique_ptr<ui::ImGuiDialog> ReXApp::CreateAchievementsOverlay() {
+  if (!runtime_ || !runtime_->kernel_state() || !imgui_drawer_ || !immediate_drawer_) {
+    return nullptr;
+  }
+  return std::make_unique<ui::AchievementsOverlayDialog>(
+      imgui_drawer_.get(), immediate_drawer_.get(), runtime_.get(), &achievements());
+}
+
+std::unique_ptr<ui::AchievementNotificationDialog> ReXApp::CreateAchievementNotificationDialog() {
+  if (!imgui_drawer_ || !immediate_drawer_ || !runtime_) {
+    return nullptr;
+  }
+  return std::make_unique<ui::AchievementToastDialog>(imgui_drawer_.get(), immediate_drawer_.get(),
+                                                      runtime_.get());
+}
+
+system::AchievementManager& ReXApp::achievements() const {
+  assert_not_null(runtime_);
+  assert_not_null(runtime_->kernel_state());
+  return runtime_->kernel_state()->achievements();
+}
 
 bool ReXApp::OnInitialize() {
   if (!SetupEnvironment())
@@ -114,13 +139,20 @@ bool ReXApp::SetupEnvironment() {
     cache_dir = user_dir / "cache";
   }
 
-  PathConfig path_config{game_dir, user_dir, update_dir, cache_dir,
-                         exe_dir / (std::string(GetName()) + ".ini")};
+  std::filesystem::path metadata_dir;
+  std::string metadata_root_cvar = REXCVAR_GET(metadata_root);
+  if (!metadata_root_cvar.empty()) {
+    metadata_dir = metadata_root_cvar;
+  }
+
+  PathConfig path_config{game_dir,  user_dir,     update_dir,
+                         cache_dir, metadata_dir, exe_dir / (std::string(GetName()) + ".ini")};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;
   update_data_root_ = path_config.update_data_root;
   cache_root_ = path_config.cache_root;
+  metadata_root_ = path_config.metadata_root;
   config_path_ = path_config.config_path;
   resolved_defaults_ = std::move(path_config);
 
@@ -164,6 +196,9 @@ bool ReXApp::SetupEnvironment() {
     REXLOG_INFO("  Update data:    {}", update_data_root_.string());
   }
   REXLOG_INFO("  Cache root:     {}", cache_root_.string());
+  if (!metadata_root_.empty()) {
+    REXLOG_INFO("  Metadata root:  {}", metadata_root_.string());
+  }
 
   return true;
 }
@@ -182,8 +217,15 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     return false;
   }
 
-  runtime_ = std::make_unique<rex::Runtime>(paths.game_data_root, paths.user_data_root,
-                                            paths.update_data_root, paths.cache_root);
+  game_data_root_ = paths.game_data_root;
+  user_data_root_ = paths.user_data_root;
+  update_data_root_ = paths.update_data_root;
+  cache_root_ = paths.cache_root;
+  metadata_root_ = paths.metadata_root;
+
+  runtime_ =
+      std::make_unique<rex::Runtime>(paths.game_data_root, paths.user_data_root,
+                                     paths.update_data_root, paths.cache_root, paths.metadata_root);
   runtime_->set_app_context(&app_context());
 
   // Window and ImGui drawer already exist from SetupPresentation; publish them
@@ -213,6 +255,9 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
       input_sys->SetActiveCallback([this]() {
+        // HasDialogs() covers every registered dialog (debug/console/settings/
+        // achievements plus anything OnCreateDialogs added), so new overlays no
+        // longer have to be added to this list by hand.
         if (!imgui_drawer_->HasDialogs()) {
           return true;
         }
@@ -269,16 +314,24 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
 }
 
 bool ReXApp::SetupPresentation() {
-#if REX_HAS_D3D12
-  config_.graphics = REX_GRAPHICS_BACKEND(rex::graphics::d3d12::D3D12GraphicsSystem);
-#elif REX_HAS_VULKAN
-  config_.graphics = REX_GRAPHICS_BACKEND(rex::graphics::vulkan::VulkanGraphicsSystem);
-#endif
+  config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
   config_.input_factory = REX_INPUT_BACKEND(rex::input::CreateDefaultInputSystem);
   config_.kernel_init = rex::kernel::InitializeKernel;
 
   OnPreSetup(config_);
+
+  if (!config_.graphics && !config_.gpu_plugin.empty()) {
+    config_.graphics = rex::system::LoadGpuPlugin(config_.gpu_plugin);
+    if (!config_.graphics) {
+      // Fatal by design: no silent headless fallback.
+      auto msg =
+          fmt::format("Failed to load GPU plugin '{}'. See log for details.", config_.gpu_plugin);
+      REXLOG_ERROR("{}", msg);
+      rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error, msg);
+      return false;
+    }
+  }
 
   if (config_.graphics) {
     X_STATUS status = config_.graphics->SetupPresentation(&app_context());
@@ -315,7 +368,7 @@ bool ReXApp::SetupPresentation() {
   }
   window_->Open();
 
-  auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(config_.graphics.get());
+  auto* graphics_system = config_.graphics.get();
   if (graphics_system && graphics_system->presenter()) {
     // SDK mode: the emulated-Xenos presenter drives the overlays.
     auto* presenter = graphics_system->presenter();
@@ -371,6 +424,13 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
       settings_overlay_ = std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
     }
   });
+  rex::ui::RegisterBind("bind_achievements", "F7", "Toggle achievements overlay", [this] {
+    if (achievements_overlay_) {
+      achievements_overlay_.reset();
+    } else {
+      achievements_overlay_ = CreateAchievementsOverlay();
+    }
+  });
 
   // Startup keyboard-shortcut hints. Only in SDK/presenter mode (detached apps
   // drive their own UI and didn't show this before the SetupOverlays refactor).
@@ -391,6 +451,24 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
 
 void ReXApp::LaunchModule() {
   app_context().CallInUIThreadDeferred([this]() {
+    // Register the achievement notification callback now that the runtime and
+    // KernelState are guaranteed to exist. Done here (not OnCreateDialogs)
+    // because KernelState is null during SetupPresentation.
+    if (!achievement_notification_) {
+      achievement_notification_ =
+          std::shared_ptr<ui::AchievementNotificationDialog>(CreateAchievementNotificationDialog());
+    }
+    if (achievement_notification_ && achievement_notification_listener_ == 0 && runtime_ &&
+        runtime_->kernel_state()) {
+      std::weak_ptr<ui::AchievementNotificationDialog> notification = achievement_notification_;
+      achievement_notification_listener_ = achievements().RegisterNotificationCallback(
+          [notification](const rex::system::AchievementEvent& event) {
+            if (auto dialog = notification.lock()) {
+              dialog->Push(event);
+            }
+          });
+    }
+
     OnPreLaunchModule();
 
     auto main_thread = runtime_->PrepareModuleLaunch();
@@ -400,8 +478,7 @@ void ReXApp::LaunchModule() {
       return;
     }
 
-    auto* graphics_system =
-        static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+    auto* graphics_system = runtime_->graphics_system();
     if (graphics_system && !runtime_->cache_root().empty()) {
       uint32_t title_id = runtime_->kernel_state()->title_id();
       if (title_id != 0) {
@@ -456,6 +533,48 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   std::_Exit(0);
 }
 
+bool ReXApp::OnCloseRequested(ui::UIEvent& e) {
+  (void)e;
+  return OnWindowCloseRequested();
+}
+
+void ReXApp::OnResize(ui::UISetupEvent& e) {
+  (void)e;
+  if (!window_) {
+    return;
+  }
+  OnWindowPixelSizeChanged(window_->GetActualPhysicalWidth(), window_->GetActualPhysicalHeight());
+  OnWindowResized(window_->GetActualLogicalWidth(), window_->GetActualLogicalHeight());
+}
+
+void ReXApp::OnDpiChanged(ui::UISetupEvent& e) {
+  (void)e;
+  if (!window_) {
+    return;
+  }
+  OnDpiScaleChanged(float(window_->GetDpi()) / float(window_->GetMediumDpi()));
+}
+
+void ReXApp::OnGotFocus(ui::UISetupEvent& e) {
+  (void)e;
+  OnWindowFocusChanged(true);
+}
+
+void ReXApp::OnLostFocus(ui::UISetupEvent& e) {
+  (void)e;
+  OnWindowFocusChanged(false);
+}
+
+void ReXApp::OnMinimized(ui::UIEvent& e) {
+  (void)e;
+  OnWindowMinimized();
+}
+
+void ReXApp::OnRestored(ui::UIEvent& e) {
+  (void)e;
+  OnWindowRestored();
+}
+
 void ReXApp::OnDestroy() {
   // Notify subclass before cleanup
   OnShutdown();
@@ -464,9 +583,18 @@ void ReXApp::OnDestroy() {
   rex::ui::UnregisterBind("bind_debug_overlay");
   rex::ui::UnregisterBind("bind_console");
   rex::ui::UnregisterBind("bind_settings");
+  rex::ui::UnregisterBind("bind_achievements");
   rex::ui::UnregisterBind("bind_fullscreen");
 
   // ImGui cleanup (reverse of setup)
+  if (achievement_notification_listener_ != 0) {
+    if (runtime_ && runtime_->kernel_state()) {
+      achievements().UnregisterCallback(achievement_notification_listener_);
+    }
+    achievement_notification_listener_ = 0;
+  }
+  achievement_notification_.reset();
+  achievements_overlay_.reset();
   settings_overlay_.reset();
   console_overlay_.reset();
   debug_overlay_.reset();

@@ -6,7 +6,6 @@ set_target_properties(rexfilesystem PROPERTIES EXPORT_NAME filesystem)
 set_target_properties(rexui PROPERTIES EXPORT_NAME ui)
 set_target_properties(rexinput PROPERTIES EXPORT_NAME input)
 set_target_properties(rexaudio PROPERTIES EXPORT_NAME audio)
-set_target_properties(rexgraphics PROPERTIES EXPORT_NAME graphics)
 set_target_properties(rexruntime PROPERTIES EXPORT_NAME runtime)
 set_target_properties(rexcodegen PROPERTIES EXPORT_NAME codegen)
 
@@ -15,6 +14,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/rexglue_helpers.cmake)
 # Build install target list dynamically based on backend options
 set(REXGLUE_INSTALL_TARGETS
     rexruntime
+    rexgpu-xenos
     disruptorplus renderdoc simde tomlplusplus
     aes128 mspack o1heap disasm xxhash
     libavcodec libavutil
@@ -115,10 +115,10 @@ if(REXGLUE_USE_VULKAN)
     )
 endif()
 
-# Install platform entry point sources and ReXApp for SDK consumers
+# Install the entry point sources (SDL3 shared + macOS variant) and ReXApp for
+# SDK consumers
 install(FILES
-    src/ui/windowed_app_main_win.cpp
-    src/ui/windowed_app_main_posix.cpp
+    src/ui/windowed_app_main_sdl.cpp
     src/ui/windowed_app_main_mac.cpp
     src/ui/rex_app.cpp
     DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue

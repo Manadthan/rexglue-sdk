@@ -7,11 +7,14 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
+#include <string_view>
 #include <unordered_map>
 
 #include <CLI/CLI.hpp>
@@ -27,6 +30,10 @@ namespace {
 bool g_finalized = false;
 bool g_lifecycle_override = false;
 std::mutex g_mutex;
+
+// Set once cvar::Init has parsed the command line; later registrations are
+// from runtime-loaded modules and drain pending values.
+std::atomic<bool> g_init_done = false;
 
 // Recursive: FlagRegistrar chain methods re-enter; change callbacks invoked
 // from SetFlagByName must not mutate the registry.
@@ -44,6 +51,18 @@ std::vector<FlagEntry>& GetRegistryStorage() {
 std::unordered_map<std::string, size_t>& GetRegistryIndex() {
   static std::unordered_map<std::string, size_t> index;
   return index;
+}
+
+// Values that arrived before their cvar was registered; runtime-loaded
+// modules register cvars long after Init/LoadConfig.
+struct PendingValues {
+  std::optional<std::string> cmdline;
+  std::optional<std::string> config;
+};
+
+std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
+  static std::unordered_map<std::string, PendingValues> pending;
+  return pending;
 }
 
 // Convert flag name to environment variable: gpu_vsync -> REX_GPU_VSYNC
@@ -172,6 +191,27 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
   size_t pos = storage.size();
   index[entry.name] = pos;
   storage.push_back(std::move(entry));
+
+  // Late registration: apply pending values in the startup order used for
+  // static cvars (command line, then environment, then config file).
+  if (g_init_done) {
+    FlagEntry& stored = storage[pos];
+    auto& pending = GetPendingValuesStorage();
+    auto pending_it = pending.find(stored.name);
+    if (pending_it != pending.end() && pending_it->second.cmdline) {
+      stored.setter(*pending_it->second.cmdline);
+    }
+    auto env_value = rex::platform::env::get(FlagNameToEnvVar(stored.name));
+    if (env_value.has_value()) {
+      stored.setter(*env_value);
+    }
+    if (pending_it != pending.end()) {
+      if (pending_it->second.config) {
+        stored.setter(*pending_it->second.config);
+      }
+      pending.erase(pending_it);
+    }
+  }
   return pos;
 }
 
@@ -249,6 +289,29 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
   }
 
   return success;
+}
+
+bool InvokeCommand(std::string_view name, std::string_view args) {
+  std::function<void(std::string_view)> cb;
+  {
+    std::lock_guard lock(GetRegistryMutex());
+    auto it = GetRegistryIndex().find(std::string(name));
+    if (it == GetRegistryIndex().end()) {
+      return false;
+    }
+    const auto& entry = GetRegistryStorage()[it->second];
+    if (entry.type != FlagType::Command) {
+      return false;
+    }
+    // Copy the callback out from under the lock; GetFlagInfo pointers are
+    // invalidated by registry mutation and a command may touch the registry.
+    cb = entry.command_callback;
+  }
+  if (!cb) {
+    return false;
+  }
+  cb(args);
+  return true;
 }
 
 std::string GetFlagByName(std::string_view name) {
@@ -468,7 +531,33 @@ std::vector<std::string> Init(int argc, char** argv) {
     fprintf(stderr, "cvar: CLI11  parse error: %s\n", e.what());
   }
 
-  return app.remaining();
+  // Stash unrecognized --options for cvars that register later. Supported
+  // forms: --name=value, --name (true), --no-name (false); a separated
+  // "--name value" pair is ambiguous with a positional, so never consumed.
+  std::vector<std::string> positional;
+  for (const auto& arg : app.remaining()) {
+    std::string_view view(arg);
+    if (!view.starts_with("--")) {
+      positional.push_back(arg);
+      continue;
+    }
+    view.remove_prefix(2);
+    std::string name;
+    std::string value = "true";
+    if (auto eq = view.find('='); eq != std::string_view::npos) {
+      name.assign(view.substr(0, eq));
+      value.assign(view.substr(eq + 1));
+    } else if (view.starts_with("no-")) {
+      name.assign(view.substr(3));
+      value = "false";
+    } else {
+      name.assign(view);
+    }
+    std::lock_guard lock(GetRegistryMutex());
+    GetPendingValuesStorage()[name].cmdline = std::move(value);
+  }
+  g_init_done = true;
+  return positional;
 }
 
 // Simple INI: `key = value` lines, `#`/`;` comments. cvars live at the top
@@ -506,10 +595,17 @@ void LoadConfig(const std::filesystem::path& config_path) {
     std::string_view value = Unquote(TrimWS(sv.substr(eq + 1)));
     if (key.empty())
       continue;
-    if (SetFlagByName(key, value)) {
+    // A cvar that is not registered yet may still belong to a module loaded
+    // later; stash the value and apply it at registration time (see
+    // RegisterFlag). Anything still pending at FinalizeInit is reported unknown.
+    if (GetFlagInfo(key) == nullptr) {
+      std::lock_guard lock(GetRegistryMutex());
+      GetPendingValuesStorage()[std::string(key)].config = std::string(value);
+      REXLOG_DEBUG("Config: '{}' deferred (cvar not yet registered)", std::string(key));
+    } else if (SetFlagByName(key, value)) {
       ++applied;
     } else {
-      REXLOG_WARN("Config: unknown cvar '{}'", std::string(key));
+      REXLOG_WARN("Config: invalid value for cvar '{}'", std::string(key));
     }
   }
   REXLOG_INFO("Loaded {} setting(s) from {}", applied, config_path.string());
@@ -538,6 +634,10 @@ void ApplyEnvironment() {
 void FinalizeInit() {
   std::lock_guard lock(g_mutex);
   g_finalized = true;
+  for (const auto& [name, values] : GetPendingValuesStorage()) {
+    (void)values;
+    REXLOG_WARN("Config: unknown cvar '{}'", name);
+  }
   REXLOG_DEBUG("cvar: initialization finalized");
 }
 
@@ -579,6 +679,8 @@ ScopedLifecycleOverride::~ScopedLifecycleOverride() {
 void ResetAllForTesting() {
   ResetAllToDefaults();
   ClearPendingRestartFlags();
+  GetPendingValuesStorage().clear();
+  g_init_done = false;
   g_finalized = false;
 }
 

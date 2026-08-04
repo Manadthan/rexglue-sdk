@@ -67,12 +67,10 @@ static void RexDumpVertexFetch(const ParsedVertexFetchInstruction& instr) {
       "VFETCH GROUND TRUTH: fetch_const={} stride={} dwords ({} bytes) "
       "offset={} dwords ({} bytes) format={} signed={} integer={} "
       "exp_adjust={} mini={} rounded={}",
-      instr.operands[1].storage_index, instr.attributes.stride,
-      instr.attributes.stride * 4, instr.attributes.offset,
-      instr.attributes.offset * 4, uint32_t(instr.attributes.data_format),
-      instr.attributes.is_signed, instr.attributes.is_integer,
-      instr.attributes.exp_adjust, instr.is_mini_fetch,
-      instr.attributes.is_index_rounded);
+      instr.operands[1].storage_index, instr.attributes.stride, instr.attributes.stride * 4,
+      instr.attributes.offset, instr.attributes.offset * 4, uint32_t(instr.attributes.data_format),
+      instr.attributes.is_signed, instr.attributes.is_integer, instr.attributes.exp_adjust,
+      instr.is_mini_fetch, instr.attributes.is_index_rounded);
 }
 
 void DxbcShaderTranslator::ProcessVertexFetchInstruction(

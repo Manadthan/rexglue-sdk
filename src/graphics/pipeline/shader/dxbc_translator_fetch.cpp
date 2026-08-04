@@ -10,6 +10,8 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
+#include <set>
 #include <cmath>
 #include <memory>
 #include <sstream>
@@ -17,6 +19,7 @@
 #include <fmt/format.h>
 
 #include <rex/assert.h>
+#include <rex/logging.h>
 #include <rex/cvar.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/render_target/cache.h>
@@ -30,8 +33,51 @@ REXCVAR_DEFINE_BOOL(draw_resolution_scaled_texture_offsets, true, "GPU/Shader",
 namespace rex::graphics {
 using namespace ucode;
 
+// Diagnostic only, off unless REX_DUMP_VFETCH is set in the environment.
+//
+// Added for the daytona native-renderer port. That title binds one vertex shader
+// for 94.6% of its draws with a NULL vertex declaration, and the layout for it
+// is not readable anywhere on the guest side: not in the shader as created (every
+// vfetch reads stride=0 offset=0 format=0), not in the fetch constants (a
+// GPUVERTEX_FETCH_CONSTANT is 2 dwords of address/size/endian and has no stride
+// or format field at all), and not in any second microcode copy. But the
+// translator below reads instr.attributes.stride and treats 0 as "fetch the same
+// address for every vertex", so a shader that renders correctly must reach here
+// with real operands. This prints what the GPU actually sees.
+//
+// Kept deliberately small and gated: rexglue-sdk is shared by six titles.
+static void RexDumpVertexFetch(const ParsedVertexFetchInstruction& instr) {
+  static const bool enabled = std::getenv("REX_DUMP_VFETCH") != nullptr;
+  if (!enabled) {
+    return;
+  }
+  // Translation is cached per unique shader, so this is naturally low-volume;
+  // dedupe anyway so a cache-miss storm cannot flood the log.
+  static std::set<uint64_t> seen;
+  const uint64_t key = (uint64_t(instr.operands[1].storage_index) << 40) |
+                       (uint64_t(instr.attributes.stride) << 24) |
+                       (uint64_t(uint32_t(instr.attributes.data_format)) << 16) |
+                       uint64_t(uint32_t(instr.attributes.offset) & 0xFFFF);
+  if (!seen.insert(key).second) {
+    return;
+  }
+  // stride and offset are in DWORDS here (see shader.h), so report bytes too --
+  // that is what a host input layout needs and what SetStreamSource reports.
+  REXLOG_WARN(
+      "VFETCH GROUND TRUTH: fetch_const={} stride={} dwords ({} bytes) "
+      "offset={} dwords ({} bytes) format={} signed={} integer={} "
+      "exp_adjust={} mini={} rounded={}",
+      instr.operands[1].storage_index, instr.attributes.stride,
+      instr.attributes.stride * 4, instr.attributes.offset,
+      instr.attributes.offset * 4, uint32_t(instr.attributes.data_format),
+      instr.attributes.is_signed, instr.attributes.is_integer,
+      instr.attributes.exp_adjust, instr.is_mini_fetch,
+      instr.attributes.is_index_rounded);
+}
+
 void DxbcShaderTranslator::ProcessVertexFetchInstruction(
     const ParsedVertexFetchInstruction& instr) {
+  RexDumpVertexFetch(instr);
   if (emit_source_map_) {
     instruction_disassembly_buffer_.Reset();
     instr.Disassemble(&instruction_disassembly_buffer_);

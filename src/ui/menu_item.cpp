@@ -11,6 +11,8 @@
 
 #include <rex/ui/menu_item.h>
 
+#include <rex/platform.h>
+
 namespace rex {
 namespace ui {
 
@@ -27,13 +29,16 @@ std::unique_ptr<MenuItem> MenuItem::Create(Type type, const std::string& text,
   return MenuItem::Create(type, text, "", std::move(callback));
 }
 
+#if !REX_PLATFORM_MAC
 std::unique_ptr<MenuItem> MenuItem::Create(Type type, const std::string& text,
                                            const std::string& hotkey,
                                            std::function<void()> callback) {
   // No native menu backend with SDL windowing; the plain item still carries
   // text/hotkey/callback state for callers that walk the tree themselves.
+  // macOS provides this factory from window_mac.cpp (MacMenuItem, Cocoa menus).
   return std::unique_ptr<MenuItem>(new MenuItem(type, text, hotkey, std::move(callback)));
 }
+#endif  // !REX_PLATFORM_MAC
 
 MenuItem::MenuItem(Type type, const std::string& text, const std::string& hotkey,
                    std::function<void()> callback)

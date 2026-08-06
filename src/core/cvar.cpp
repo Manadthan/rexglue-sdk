@@ -58,6 +58,10 @@ std::unordered_map<std::string, size_t>& GetRegistryIndex() {
 struct PendingValues {
   std::optional<std::string> cmdline;
   std::optional<std::string> config;
+  // Programmatic SetFlagByName before the owning module registered the flag
+  // (e.g. an app forcing GPU cvars in OnPreSetup, before the GPU plugin
+  // loads). Applied last: the call happened after cmdline/config parsing.
+  std::optional<std::string> api;
 };
 
 std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
@@ -209,6 +213,9 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
       if (pending_it->second.config) {
         stored.setter(*pending_it->second.config);
       }
+      if (pending_it->second.api) {
+        stored.setter(*pending_it->second.api);
+      }
       pending.erase(pending_it);
     }
   }
@@ -254,7 +261,11 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetRegistryIndex().find(std::string(name));
   if (it == GetRegistryIndex().end()) {
-    return false;
+    // Not registered yet: runtime-loaded modules (GPU plugins) register their
+    // cvars long after app hooks run. Stash the value; RegisterFlag applies it.
+    GetPendingValuesStorage()[std::string(name)].api = std::string(value);
+    REXLOG_DEBUG("SetFlagByName: '{}' deferred (cvar not yet registered)", std::string(name));
+    return true;
   }
 
   const auto& entry = GetRegistryStorage()[it->second];
@@ -451,7 +462,11 @@ bool HasNonDefaultValue(std::string_view name) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetRegistryIndex().find(std::string(name));
   if (it == GetRegistryIndex().end()) {
-    return false;
+    // Not registered yet: runtime-loaded modules (GPU plugins) register their
+    // cvars long after app hooks run. Stash the value; RegisterFlag applies it.
+    GetPendingValuesStorage()[std::string(name)].api = std::string(value);
+    REXLOG_DEBUG("SetFlagByName: '{}' deferred (cvar not yet registered)", std::string(name));
+    return true;
   }
   const auto& entry = GetRegistryStorage()[it->second];
   return entry.getter() != entry.default_value;

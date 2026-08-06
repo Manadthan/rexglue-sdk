@@ -462,11 +462,7 @@ bool HasNonDefaultValue(std::string_view name) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetRegistryIndex().find(std::string(name));
   if (it == GetRegistryIndex().end()) {
-    // Not registered yet: runtime-loaded modules (GPU plugins) register their
-    // cvars long after app hooks run. Stash the value; RegisterFlag applies it.
-    GetPendingValuesStorage()[std::string(name)].api = std::string(value);
-    REXLOG_DEBUG("SetFlagByName: '{}' deferred (cvar not yet registered)", std::string(name));
-    return true;
+    return false;
   }
   const auto& entry = GetRegistryStorage()[it->second];
   return entry.getter() != entry.default_value;

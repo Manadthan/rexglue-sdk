@@ -39,6 +39,15 @@ ThreadState::ThreadState(uint32_t thread_id, uint32_t stack_base, uint32_t pcr_a
   context_->r1.u64 = stack_base;    // Stack pointer
   context_->r13.u64 = pcr_address;  // PCR address
 
+  // Seed the FPSCR shadow from the host: exception masks ON, host rounding.
+  // XThread::Execute re-seeds on the guest thread itself, but host-side
+  // threads (AudioSystem worker, GPU command processor) run guest callbacks
+  // through FunctionDispatcher::Execute with THIS state, and with csr == 0
+  // the first enableFlushMode() wrote MXCSR = FTZ|DAZ with every exception
+  // mask cleared, so the next inexact FP op raised STATUS_FLOAT_INEXACT_RESULT
+  // (0xC000008F) and killed the process.
+  context_->fpscr.InitHost();
+
   // Note(tomc): the rexglue abi passes memory base via 'base' parameter to each function call,
   // so we don't need to store it in the context like JIT did.
 }

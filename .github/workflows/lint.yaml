@@ -5,7 +5,9 @@ on: [pull_request, push]
 jobs:
   format-check:
     name: Format Check
-    runs-on: ubuntu-latest
+    # Pinned: apt.llvm.org has no clang-format 20 repository for the newer
+    # ubuntu-latest image (26.04), so llvm.sh 20 fails there with a 404.
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6

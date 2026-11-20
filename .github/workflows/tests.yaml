@@ -13,7 +13,10 @@ on:
 jobs:
   test:
     name: Build & run tests (linux-amd64)
-    runs-on: ubuntu-latest
+    # Pinned: the steps below are written for 24.04 (noble package lists,
+    # python3.12, llvm.sh 20); apt.llvm.org has no clang 20 repository for the
+    # newer ubuntu-latest image, so the install fails there with a 404.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:

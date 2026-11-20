@@ -50,6 +50,7 @@ struct PathConfig {
 
 namespace ui {
 class AchievementNotificationDialog;
+class AchievementsOverlayDialog;
 class ConsoleDialog;
 class SettingsDialog;
 }  // namespace ui
@@ -256,6 +257,11 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
  private:
   std::function<void(PathConfig)> MakeResumeCallback();
 
+  // Host side of XamShowAchievementsUI: opens the achievements list in
+  // system-UI mode. Called on a guest thread; see
+  // KernelState::ShowAchievementsUiCallback for the contract.
+  bool ShowGuestAchievementsUi(uint32_t user_index, std::function<void()> on_closed);
+
   // Stand up the ImGui overlay stack (drawer, F3/Backtick/F4 binds, dialogs)
   // independently of how the presenter/drawer were obtained. `presenter` may be
   // null (detached mode).
@@ -299,6 +305,12 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<ui::ConsoleDialog> console_overlay_;
   std::unique_ptr<ui::SettingsDialog> settings_overlay_;
   std::unique_ptr<ui::ImGuiDialog> achievements_overlay_;
+  // The achievements list the title opened itself. Owns itself (deleted by
+  // ImGuiDialog::Close); only touched on the UI thread.
+  ui::AchievementsOverlayDialog* guest_achievements_ui_ = nullptr;
+  // True from the guest's request until that list is gone again. While set,
+  // the title gets no input.
+  std::atomic<bool> guest_ui_open_{false};
   std::shared_ptr<ui::AchievementNotificationDialog> achievement_notification_;
   uint64_t achievement_notification_listener_ = 0;
   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;

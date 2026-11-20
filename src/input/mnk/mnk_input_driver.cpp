@@ -246,6 +246,13 @@ X_RESULT MnkInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   std::lock_guard lock(state_mutex_);
+  if (!is_active()) {
+    // Same rule as GetState: while an overlay or a system UI owns the input,
+    // the title sees none. Drop what was typed meanwhile so it isn't replayed
+    // into the title afterwards.
+    keystroke_queue_ = {};
+    return X_ERROR_EMPTY;
+  }
   if (keystroke_queue_.empty()) {
     return X_ERROR_EMPTY;
   }

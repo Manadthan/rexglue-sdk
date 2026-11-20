@@ -72,6 +72,64 @@ std::unique_ptr<ui::ImGuiDialog> ReXApp::CreateAchievementsOverlay() {
       imgui_drawer_.get(), immediate_drawer_.get(), runtime_.get(), &achievements());
 }
 
+bool ReXApp::ShowGuestAchievementsUi(uint32_t user_index, std::function<void()> on_closed) {
+  (void)user_index;
+  if (!imgui_drawer_ || !immediate_drawer_ || shutting_down_.load(std::memory_order_acquire)) {
+    return false;
+  }
+  bool expected = false;
+  if (!guest_ui_open_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    return false;  // already showing
+  }
+  const bool queued = app_context().CallInUIThread([this, on_closed = std::move(on_closed)]() {
+    if (!runtime_ || !runtime_->kernel_state() || !imgui_drawer_ || !immediate_drawer_) {
+      guest_ui_open_.store(false, std::memory_order_release);
+      on_closed();
+      return;
+    }
+    auto* dialog = new ui::AchievementsOverlayDialog(imgui_drawer_.get(), immediate_drawer_.get(),
+                                                     runtime_.get(), &achievements());
+    dialog->EnableSystemUiMode(
+        [this](uint16_t* buttons, int16_t* thumb_ly) {
+          auto* input_sys =
+              runtime_ ? static_cast<rex::input::InputSystem*>(runtime_->input_system()) : nullptr;
+          if (!input_sys) {
+            return false;
+          }
+          // Any pad may drive the list, as any pad could have opened it.
+          bool any = false;
+          uint16_t all_buttons = 0;
+          int16_t strongest_ly = 0;
+          for (uint32_t user = 0; user < 4; ++user) {
+            rex::input::X_INPUT_STATE state = {};
+            if (input_sys->GetState(user, &state) != X_ERROR_SUCCESS) {
+              continue;
+            }
+            any = true;
+            all_buttons |= static_cast<uint16_t>(state.gamepad.buttons);
+            const int16_t ly = static_cast<int16_t>(state.gamepad.thumb_ly);
+            if (std::abs(static_cast<int>(ly)) > std::abs(static_cast<int>(strongest_ly))) {
+              strongest_ly = ly;
+            }
+          }
+          *buttons = all_buttons;
+          *thumb_ly = strongest_ly;
+          return any;
+        },
+        [this, on_closed]() {
+          guest_achievements_ui_ = nullptr;
+          guest_ui_open_.store(false, std::memory_order_release);
+          on_closed();
+        });
+    guest_achievements_ui_ = dialog;
+  });
+  if (!queued) {
+    guest_ui_open_.store(false, std::memory_order_release);
+    return false;
+  }
+  return true;
+}
+
 std::unique_ptr<ui::AchievementNotificationDialog> ReXApp::CreateAchievementNotificationDialog() {
   if (!imgui_drawer_ || !immediate_drawer_ || !runtime_) {
     return nullptr;
@@ -251,10 +309,22 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     ppc_info_.register_modules(runtime_->kernel_state());
   }
 
+  if (imgui_drawer_ && immediate_drawer_ && runtime_->kernel_state()) {
+    runtime_->kernel_state()->set_show_achievements_ui(
+        [this](uint32_t user_index, std::function<void()> on_closed) {
+          return ShowGuestAchievementsUi(user_index, std::move(on_closed));
+        });
+  }
+
   if (imgui_drawer_) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
       input_sys->SetActiveCallback([this]() {
+        // While a list the title opened itself is up, the title gets no input;
+        // only the UI thread (that dialog's own pad poll) still does.
+        if (guest_ui_open_.load(std::memory_order_acquire)) {
+          return app_context().IsInUIThread();
+        }
         // HasDialogs() covers every registered dialog (debug/console/settings/
         // achievements plus anything OnCreateDialogs added), so new overlays no
         // longer have to be added to this list by hand.
@@ -603,6 +673,13 @@ void ReXApp::OnDestroy() {
   }
   achievement_notification_.reset();
   achievements_overlay_.reset();
+  if (guest_achievements_ui_) {
+    // Not closed through ImGuiDialog::Close, so its on_closed never runs; the
+    // kernel it would notify is going away as well.
+    delete guest_achievements_ui_;
+    guest_achievements_ui_ = nullptr;
+    guest_ui_open_.store(false, std::memory_order_release);
+  }
   settings_overlay_.reset();
   console_overlay_.reset();
   debug_overlay_.reset();

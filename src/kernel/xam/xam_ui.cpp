@@ -592,6 +592,30 @@ u32 XamShowMessageBoxUIEx_entry(u32 user_index, mapped_wstring title_ptr, mapped
                                    flags, result_ptr, overlapped);
 }
 
+u32 XamShowAchievementsUI_entry(u32 user_index, u32 unk) {
+  auto* kernel_state = REX_KERNEL_STATE();
+  const auto& show = kernel_state->show_achievements_ui();
+  if (!show || REXCVAR_GET(headless)) {
+    REXKRNL_WARN("XamShowAchievementsUI({}, {:08X}): no host UI registered", uint32_t(user_index),
+                 uint32_t(unk));
+    return X_ERROR_SUCCESS;
+  }
+
+  // Not a blocking call on the console either: the title keeps running, sees
+  // XN_SYS_UI go up and XamIsUIActive() return true until the UI is dismissed.
+  ++xam_dialogs_shown_;
+  kernel_state->BroadcastNotification(0x9, true);
+  const bool shown = show(uint32_t(user_index), [kernel_state]() {
+    --xam_dialogs_shown_;
+    kernel_state->BroadcastNotification(0x9, false);
+  });
+  if (!shown) {
+    --xam_dialogs_shown_;
+    kernel_state->BroadcastNotification(0x9, false);
+  }
+  return X_ERROR_SUCCESS;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace rex
@@ -604,6 +628,7 @@ REX_EXPORT(__imp__XamShowDirtyDiscErrorUI, rex::kernel::xam::XamShowDirtyDiscErr
 REX_EXPORT(__imp__XamShowPartyUI, rex::kernel::xam::XamShowPartyUI_entry)
 REX_EXPORT(__imp__XamShowCommunitySessionsUI, rex::kernel::xam::XamShowCommunitySessionsUI_entry)
 REX_EXPORT(__imp__XamShowMessageBoxUIEx, rex::kernel::xam::XamShowMessageBoxUIEx_entry)
+REX_EXPORT(__imp__XamShowAchievementsUI, rex::kernel::xam::XamShowAchievementsUI_entry)
 
 REX_EXPORT_STUB(__imp__XamIsGuideDisabled);
 REX_EXPORT_STUB(__imp__XamIsMessageBoxActive);
@@ -615,7 +640,6 @@ REX_EXPORT_STUB(__imp__XamNavigate);
 REX_EXPORT_STUB(__imp__XamNavigateBack);
 REX_EXPORT_STUB(__imp__XamOverrideHudOpenType);
 REX_EXPORT_STUB(__imp__XamShowAchievementDetailsUI);
-REX_EXPORT_STUB(__imp__XamShowAchievementsUI);
 REX_EXPORT_STUB(__imp__XamShowAchievementsUIEx);
 REX_EXPORT_STUB(__imp__XamShowAndWaitForMessageBoxEx);
 REX_EXPORT_STUB(__imp__XamShowAvatarAwardGamesUI);

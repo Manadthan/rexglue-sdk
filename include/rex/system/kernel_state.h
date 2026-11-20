@@ -336,6 +336,17 @@ class KernelState {
   using AchievementUnlockCallback = std::function<void(const AchievementInfo&)>;
   AchievementListenerHandle RegisterAchievementUnlockCallback(AchievementUnlockCallback cb);
 
+  // Host UI for XamShowAchievementsUI. Called on a guest thread; returns false
+  // when nothing was shown. If it returns true it must call `on_closed` exactly
+  // once, when the UI has gone away. Set once during setup, before the title
+  // runs; unset, the export only logs.
+  using ShowAchievementsUiCallback =
+      std::function<bool(uint32_t user_index, std::function<void()> on_closed)>;
+  void set_show_achievements_ui(ShowAchievementsUiCallback cb) {
+    show_achievements_ui_ = std::move(cb);
+  }
+  const ShowAchievementsUiCallback& show_achievements_ui() const { return show_achievements_ui_; }
+
  private:
   void SignalAllWaitableObjects();
   void WaitForThreadsToExit(const std::vector<object_ref<XThread>>& threads, uint32_t timeout_ms);
@@ -387,6 +398,7 @@ class KernelState {
   uint32_t kernel_guest_globals_ = 0;
 
   AchievementManager achievement_manager_;
+  ShowAchievementsUiCallback show_achievements_ui_;
 
   std::atomic<bool> dispatch_thread_running_;
   std::atomic<bool> terminating_title_{false};

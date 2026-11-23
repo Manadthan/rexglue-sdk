@@ -34,6 +34,16 @@
 #include <shellapi.h>
 #endif
 
+#if REX_PLATFORM_ANDROID
+#include <android/log.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#include <SDL3/SDL_system.h>
+
+#include <rex/main_android.h>
+#endif
+
 namespace {
 
 int RunWindowedApp(int argc, char** argv) {
@@ -122,6 +132,89 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
     argv_ptrs.push_back(s.data());
   }
   return RunWindowedApp(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
+}
+
+#elif REX_PLATFORM_ANDROID
+
+namespace {
+
+// stdout/stderr go nowhere on Android; forward them to logcat so the SDK's
+// console log sink and fprintf diagnostics show up under the "rexglue" tag.
+void* LogcatPump(void* fd_ptr) {
+  int fd = static_cast<int>(reinterpret_cast<intptr_t>(fd_ptr));
+  char buf[1024];
+  std::string line;
+  ssize_t n;
+  while ((n = read(fd, buf, sizeof(buf))) > 0) {
+    for (ssize_t i = 0; i < n; ++i) {
+      if (buf[i] == '\n') {
+        __android_log_write(ANDROID_LOG_INFO, "rexglue", line.c_str());
+        line.clear();
+      } else {
+        line.push_back(buf[i]);
+      }
+    }
+  }
+  return nullptr;
+}
+
+void RedirectStdioToLogcat() {
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+  int pipe_fds[2];
+  if (pipe(pipe_fds) != 0) {
+    return;
+  }
+  setvbuf(stdout, nullptr, _IOLBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
+  dup2(pipe_fds[1], STDOUT_FILENO);
+  dup2(pipe_fds[1], STDERR_FILENO);
+  pthread_t thread;
+  if (pthread_create(&thread, nullptr, LogcatPump,
+                     reinterpret_cast<void*>(intptr_t(pipe_fds[0]))) == 0) {
+    pthread_detach(thread);
+  }
+}
+
+}  // namespace
+
+// SDL3's SDLActivity loads libmain.so and calls SDL_main on its own thread.
+// Arguments come from SDLActivity.getArguments(); paths default to the app's
+// external files folder (/sdcard/Android/data/<package>/files), which the user
+// can reach over USB or with a file manager to drop the game data in.
+extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* argv[]) {
+  RedirectStdioToLogcat();
+  rex::InitializeAndroidCore();
+
+  std::string app_dir;
+  if (const char* external = SDL_GetAndroidExternalStoragePath()) {
+    app_dir = external;
+  } else if (const char* internal = SDL_GetAndroidInternalStoragePath()) {
+    app_dir = internal;
+  }
+  if (!app_dir.empty()) {
+    setenv("HOME", app_dir.c_str(), 1);
+    setenv("XDG_DATA_HOME", app_dir.c_str(), 1);
+    setenv("REX_ANDROID_APP_DIR", app_dir.c_str(), 1);
+  }
+  __android_log_print(ANDROID_LOG_INFO, "rexglue", "app folder: %s", app_dir.c_str());
+
+  std::vector<std::string> args;
+  args.emplace_back(argc > 0 && argv[0] ? argv[0] : "rexglue");
+  for (int i = 1; i < argc; ++i) {
+    args.emplace_back(argv[i]);
+  }
+  std::vector<char*> argv_ptrs;
+  argv_ptrs.reserve(args.size());
+  for (auto& s : args) {
+    argv_ptrs.push_back(s.data());
+  }
+  int result = RunWindowedApp(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
+  rex::ShutdownAndroidCore();
+  return result;
 }
 
 #else

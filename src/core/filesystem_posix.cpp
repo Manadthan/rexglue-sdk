@@ -27,6 +27,7 @@
 #include <rex/string.h>
 
 #include <dirent.h>
+#include <dlfcn.h>
 #include <ftw.h>
 #include <libgen.h>
 #include <pwd.h>
@@ -52,6 +53,15 @@ std::filesystem::path to_path(const std::u16string_view source) {
 namespace filesystem {
 
 std::filesystem::path GetExecutablePath() {
+#if REX_PLATFORM_ANDROID
+  // /proc/self/exe is the zygote's app_process. The meaningful "executable"
+  // is the native library holding this code: its folder is the APK's
+  // nativeLibraryDir, where the GPU plugins are installed beside it.
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<void*>(&GetExecutablePath), &info) && info.dli_fname) {
+    return std::filesystem::path(info.dli_fname);
+  }
+#endif
   char buff[FILENAME_MAX] = "";
   readlink("/proc/self/exe", buff, FILENAME_MAX);
   std::string s(buff);

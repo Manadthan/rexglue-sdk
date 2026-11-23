@@ -72,6 +72,12 @@ if(WIN32)
         window_sdl.cpp
         windowed_app_context_sdl.cpp
     )
+elseif(ANDROID)
+    set(REXUI_PLATFORM_SOURCES
+        surface_android.cpp
+        window_sdl.cpp
+        windowed_app_context_sdl.cpp
+    )
 elseif(APPLE)
     set(REXUI_PLATFORM_SOURCES
         surface_sdl.cpp
@@ -159,6 +165,8 @@ if(WIN32)
         dxgi
         dxguid
     )
+elseif(ANDROID)
+    target_link_libraries(rexui PUBLIC android log)
 elseif(NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(X11_XCB REQUIRED x11-xcb)

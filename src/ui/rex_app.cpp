@@ -20,6 +20,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging/sink.h>
 #include <rex/logging.h>
+#include <rex/platform/env.h>
 #include <rex/ui/overlay/achievement_toast.h>
 #include <rex/ui/overlay/achievements_overlay.h>
 #include <rex/ui/overlay/console_overlay.h>
@@ -127,6 +128,15 @@ void ReXApp::ExitAfterFailedLaunch() {
 
 bool ReXApp::SetupEnvironment() {
   auto exe_dir = rex::filesystem::GetExecutableFolder();
+  // Folder for the .ini and the logs. Beside the executable on desktop; on
+  // Android the library folder is read-only, so the entry point names a
+  // writable app folder instead (REX_ANDROID_APP_DIR).
+  std::filesystem::path config_dir = exe_dir;
+#if REX_PLATFORM_ANDROID
+  if (auto app_dir = rex::platform::env::get("REX_ANDROID_APP_DIR")) {
+    config_dir = std::filesystem::path(*app_dir);
+  }
+#endif
 
   std::filesystem::path game_dir;
   std::string game_data_cvar = REXCVAR_GET(game_data_root);
@@ -166,7 +176,7 @@ bool ReXApp::SetupEnvironment() {
   }
 
   PathConfig path_config{game_dir,  user_dir,     update_dir,
-                         cache_dir, metadata_dir, exe_dir / (std::string(GetName()) + ".ini")};
+                         cache_dir, metadata_dir, config_dir / (std::string(GetName()) + ".ini")};
   OnConfigurePaths(path_config);
   game_data_root_ = path_config.game_data_root;
   user_data_root_ = path_config.user_data_root;
@@ -191,7 +201,7 @@ bool ReXApp::SetupEnvironment() {
                                         log_level_str, category_levels);
   if (log_file_cvar.empty()) {
     log_config.app_name = std::string(GetName());
-    log_config.log_dir = (exe_dir / "logs").string();
+    log_config.log_dir = (config_dir / "logs").string();
   }
 
   rex::InitLogging(log_config);

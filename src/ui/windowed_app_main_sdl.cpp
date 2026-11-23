@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#include <SDL3/SDL_messagebox.h>
 #include <SDL3/SDL_system.h>
 
 #include <rex/main_android.h>
@@ -187,6 +188,22 @@ void RedirectStdioToLogcat() {
 // can reach over USB or with a file manager to drop the game data in.
 extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* argv[]) {
   RedirectStdioToLogcat();
+
+  // Recompiled code addresses the guest's physical window (0xE0000000+)
+  // without the 4 KiB host offset that larger pages would need (see
+  // REX_PHYS_HOST_OFFSET in the codegen init header, 0 on Linux/Android).
+  // Kernels built for 16 KiB pages cannot run it, so say so instead of
+  // corrupting memory.
+  if (getpagesize() != 4096) {
+    __android_log_print(ANDROID_LOG_FATAL, "rexglue", "unsupported page size %d (4096 needed)",
+                        getpagesize());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Unsupported device",
+                             "This device uses memory pages larger than 4 KiB, which this "
+                             "port does not support.",
+                             nullptr);
+    return EXIT_FAILURE;
+  }
+
   rex::InitializeAndroidCore();
 
   std::string app_dir;

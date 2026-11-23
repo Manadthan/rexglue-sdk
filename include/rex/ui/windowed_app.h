@@ -24,9 +24,11 @@
 #include <rex/platform.h>
 #include <rex/ui/windowed_app_context.h>
 
-#if REX_PLATFORM_ANDROID
-// Multiple apps in a single library instead of separate executables.
-#define XE_UI_WINDOWED_APPS_IN_LIBRARY 1
+// Xenia put several apps in one Android library and picked one by name from
+// its activity. A ReXGlue port is one app per libmain.so, started by SDL3's
+// SDLActivity through SDL_main, so Android uses the executable model too.
+#ifndef XE_UI_WINDOWED_APPS_IN_LIBRARY
+#define XE_UI_WINDOWED_APPS_IN_LIBRARY 0
 #endif
 
 namespace rex {

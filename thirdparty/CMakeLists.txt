@@ -243,8 +243,17 @@ target_compile_options(imgui PRIVATE -w)
 # SDL3 - Cross-platform media layer
 #=============================================================================
 set(SDL_INSTALL ON CACHE BOOL "" FORCE)
-set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-set(SDL_STATIC ON CACHE BOOL "" FORCE)
+if(ANDROID)
+    # One SDL per process on Android. SDLActivity drives SDL through JNI, and
+    # a static SDL linked into both librexruntime.so and the app's libmain.so
+    # gives two copies whose hidden state (the Android window, the JNI class
+    # refs) can split between them. libSDL3.so is what SDLActivity loads first.
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+else()
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+endif()
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 
@@ -287,8 +296,8 @@ set(SDL_DISKAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
-# Linux audio backends
-if(UNIX AND NOT APPLE)
+# Linux audio backends (Android uses SDL's AAudio/OpenSL ES drivers)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     set(SDL_ALSA              ON  CACHE BOOL "" FORCE)
     set(SDL_ALSA_SHARED       ON  CACHE BOOL "" FORCE)
     set(SDL_PULSEAUDIO        ON  CACHE BOOL "" FORCE)

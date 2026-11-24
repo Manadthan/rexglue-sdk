@@ -141,6 +141,11 @@ namespace {
 
 // stdout/stderr go nowhere on Android; forward them to logcat so the SDK's
 // console log sink and fprintf diagnostics show up under the "rexglue" tag.
+// Copy of everything written to stdout/stderr, flushed line by line, so a run
+// that dies leaves its last words on disk (<app folder>/last_run.log) for the
+// launcher's crash screen to show -- without a PC or adb.
+FILE* g_run_log = nullptr;
+
 void* LogcatPump(void* fd_ptr) {
   int fd = static_cast<int>(reinterpret_cast<intptr_t>(fd_ptr));
   char buf[1024];
@@ -150,6 +155,11 @@ void* LogcatPump(void* fd_ptr) {
     for (ssize_t i = 0; i < n; ++i) {
       if (buf[i] == '\n') {
         __android_log_write(ANDROID_LOG_INFO, "rexglue", line.c_str());
+        if (g_run_log) {
+          std::fputs(line.c_str(), g_run_log);
+          std::fputc('\n', g_run_log);
+          std::fflush(g_run_log);
+        }
         line.clear();
       } else {
         line.push_back(buf[i]);
@@ -159,12 +169,15 @@ void* LogcatPump(void* fd_ptr) {
   return nullptr;
 }
 
-void RedirectStdioToLogcat() {
+void RedirectStdioToLogcat(const std::string& app_dir) {
   static bool done = false;
   if (done) {
     return;
   }
   done = true;
+  if (!app_dir.empty()) {
+    g_run_log = std::fopen((app_dir + "/last_run.log").c_str(), "w");
+  }
   int pipe_fds[2];
   if (pipe(pipe_fds) != 0) {
     return;
@@ -187,7 +200,14 @@ void RedirectStdioToLogcat() {
 // external files folder (/sdcard/Android/data/<package>/files), which the user
 // can reach over USB or with a file manager to drop the game data in.
 extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* argv[]) {
-  RedirectStdioToLogcat();
+  std::string app_dir;
+  if (const char* external = SDL_GetAndroidExternalStoragePath()) {
+    app_dir = external;
+  } else if (const char* internal = SDL_GetAndroidInternalStoragePath()) {
+    app_dir = internal;
+  }
+  RedirectStdioToLogcat(app_dir);
+  std::printf("SDL_main: start, app folder %s, page size %d\n", app_dir.c_str(), getpagesize());
 
   // Recompiled code addresses the guest's physical window (0xE0000000+)
   // without the 4 KiB host offset that larger pages would need (see
@@ -206,12 +226,6 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* a
 
   rex::InitializeAndroidCore();
 
-  std::string app_dir;
-  if (const char* external = SDL_GetAndroidExternalStoragePath()) {
-    app_dir = external;
-  } else if (const char* internal = SDL_GetAndroidInternalStoragePath()) {
-    app_dir = internal;
-  }
   if (!app_dir.empty()) {
     setenv("HOME", app_dir.c_str(), 1);
     setenv("XDG_DATA_HOME", app_dir.c_str(), 1);
@@ -229,7 +243,9 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* a
   for (auto& s : args) {
     argv_ptrs.push_back(s.data());
   }
+  std::printf("SDL_main: starting the app\n");
   int result = RunWindowedApp(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
+  std::printf("SDL_main: app returned %d\n", result);
   rex::ShutdownAndroidCore();
   return result;
 }

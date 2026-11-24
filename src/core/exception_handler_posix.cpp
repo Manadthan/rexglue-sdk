@@ -25,6 +25,11 @@
 
 #include <ucontext.h>
 
+#if REX_PLATFORM_ANDROID
+#include <dlfcn.h>
+#include <stdio.h>
+#endif
+
 namespace rex::arch {
 
 bool signal_handlers_installed_ = false;
@@ -205,6 +210,31 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+#if REX_PLATFORM_ANDROID && REX_ARCH_ARM64
+  // Nobody claimed the fault: a real crash. Returning would re-run the same
+  // instruction forever (a frozen game rather than a crash). Say where it was
+  // -- stderr reaches logcat and last_run.log -- then put the previous
+  // handler back so the retried instruction ends in Android's crash report.
+  {
+    Dl_info info{};
+    const void* pc = reinterpret_cast<const void*>(mcontext.pc);
+    const char* lib = "?";
+    const char* sym = "?";
+    uintptr_t off = 0;
+    if (dladdr(pc, &info)) {
+      lib = info.dli_fname ? info.dli_fname : "?";
+      sym = info.dli_sname ? info.dli_sname : "?";
+      off = reinterpret_cast<uintptr_t>(pc) - reinterpret_cast<uintptr_t>(info.dli_fbase);
+    }
+    dprintf(2, "FATAL: signal %d (code %d) at pc %p (%s+0x%zx, %s), fault address %p, lr %p\n",
+            signal_number, signal_info->si_code, pc, lib, size_t(off), sym, signal_info->si_addr,
+            reinterpret_cast<void*>(mcontext.regs[30]));
+    sigaction(signal_number,
+              signal_number == SIGILL ? &original_sigill_handler_ : &original_sigsegv_handler_,
+              nullptr);
+  }
+#endif
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {

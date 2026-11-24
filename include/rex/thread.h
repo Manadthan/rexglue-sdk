@@ -420,11 +420,21 @@ class Thread : public WaitHandle {
   // Returns the ID of the thread.
   virtual uint32_t system_id() const = 0;
 
-  // Returns the current name of the thread, if previously specified.
-  const std::string& name() const { return name_; }
+  // Returns the current name of the thread, if previously specified. A copy:
+  // the name can be changed from another thread at any time (the guest's
+  // SetThreadName exception while the thread starts up), and handing out a
+  // reference to a string another thread may be reassigning is a double free
+  // (caught by Android's Scudo allocator).
+  std::string name() const {
+    std::lock_guard<std::mutex> lock(name_mutex_);
+    return name_;
+  }
 
   // Sets the name of the thread, used in debugging and logging.
-  virtual void set_name(std::string name) { name_ = std::move(name); }
+  virtual void set_name(std::string name) {
+    std::lock_guard<std::mutex> lock(name_mutex_);
+    name_ = std::move(name);
+  }
 
   // Returns the current priority value for the thread.
   virtual int32_t priority() = 0;
@@ -465,6 +475,7 @@ class Thread : public WaitHandle {
   virtual void Terminate(int exit_code) = 0;
 
  protected:
+  mutable std::mutex name_mutex_;
   std::string name_;
 };
 

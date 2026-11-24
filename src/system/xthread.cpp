@@ -439,10 +439,19 @@ X_STATUS XThread::Create() {
     // Set thread ID override. This is used by logging.
     rex::thread::set_current_thread_id(handle());
 
-    // Set name immediately, if we have one.
-    thread_->set_name(thread_name_);
+    // Set name immediately, if we have one. Copied under the lock: the
+    // creating thread may be renaming us right now (XThread::Create's
+    // default name, or the guest's SetThreadName), and reading a std::string
+    // while another thread reassigns it is a double free -- Android's Scudo
+    // allocator aborts on it at startup.
+    std::string start_name;
+    {
+      std::lock_guard<std::mutex> lock(thread_lock_);
+      start_name = thread_name_;
+    }
+    thread_->set_name(start_name);
 
-    PROFILE_THREAD_ENTER(thread_name_.c_str());
+    PROFILE_THREAD_ENTER(start_name.c_str());
     PROFILE_THREAD_CREATED();
 
     // Execute user code.
@@ -466,7 +475,12 @@ X_STATUS XThread::Create() {
   }
 
   // Set the thread name based on host ID (for easier debugging).
-  if (thread_name_.empty()) {
+  bool unnamed;
+  {
+    std::lock_guard<std::mutex> lock(thread_lock_);
+    unnamed = thread_name_.empty();
+  }
+  if (unnamed) {
     set_name(fmt::format("XThread{:04X}", thread_->system_id()));
   }
 

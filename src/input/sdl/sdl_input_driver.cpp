@@ -450,8 +450,38 @@ std::unique_lock<std::mutex> SDLInputDriver::DrainAndLock() {
   return guard;
 }
 
+namespace {
+// Controller diagnostics: logs each raw joystick axis and each mapped gamepad
+// axis when it crosses half of its travel, so a log taken while moving each
+// stick and trigger in turn shows how the device's axes reach the game.
+// Bounded, so it costs nothing after the first few hundred movements.
+void LogAxisCrossing(const char* kind, SDL_JoystickID which, int axis, int16_t value) {
+  static int logged = 0;
+  static std::array<std::array<int8_t, 32>, 2> last{};
+  if (logged >= 400 || axis < 0 || axis >= 32) {
+    return;
+  }
+  const int slot = (kind[0] == 'r') ? 0 : 1;
+  const int8_t zone = value > 16384 ? 1 : (value < -16384 ? -1 : 0);
+  if (zone == last[slot][axis]) {
+    return;
+  }
+  last[slot][axis] = zone;
+  ++logged;
+  REXLOG_WARN("SDL input diag: {} axis {} -> {} (value {}, device {})", kind, axis,
+              zone > 0 ? "+" : (zone < 0 ? "-" : "0"), value, which);
+}
+}  // namespace
+
 void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
   switch (event.type) {
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+      LogAxisCrossing("raw joystick", event.jaxis.which, event.jaxis.axis, event.jaxis.value);
+      break;
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+      REXLOG_WARN("SDL input diag: raw joystick button {} down (device {})", event.jbutton.button,
+                  event.jbutton.which);
+      break;
     case SDL_EVENT_GAMEPAD_ADDED:
       OnControllerDeviceAddedLocked(event);
       break;
@@ -459,6 +489,7 @@ void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
       OnControllerDeviceRemovedLocked(event);
       break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+      LogAxisCrossing("gamepad", event.gaxis.which, event.gaxis.axis, event.gaxis.value);
       OnControllerDeviceAxisMotionLocked(event);
       break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
@@ -487,6 +518,14 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
       static_cast<int>(SDL_GetJoystickType(SDL_GetGamepadJoystick(controller))),
       static_cast<int>(SDL_GetGamepadType(controller)), SDL_GetGamepadVendor(controller),
       SDL_GetGamepadProduct(controller));
+  {
+    SDL_Joystick* joy = SDL_GetGamepadJoystick(controller);
+    char* mapping = SDL_GetGamepadMapping(controller);
+    REXLOG_WARN("SDL input diag: {} axes, {} buttons, {} hats; mapping: {}",
+                SDL_GetNumJoystickAxes(joy), SDL_GetNumJoystickButtons(joy),
+                SDL_GetNumJoystickHats(joy), mapping ? mapping : "(none)");
+    SDL_free(mapping);
+  }
   int user_id = -1;
   // Check if the controller has a player index LED.
   user_id = SDL_GetGamepadPlayerIndex(controller);

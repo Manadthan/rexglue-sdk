@@ -97,6 +97,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::mutex event_queue_mutex_;
   std::vector<SDL_Event> pending_events_;
   std::array<KeystrokeState, HID_SDL_USER_COUNT> keystroke_states_;
+  // Android: whether a controller has shown real analog trigger axes (L, R).
+  std::array<std::array<bool, 2>, HID_SDL_USER_COUNT> trigger_axis_seen_{};
 };
 
 }  // namespace rex::input::sdl

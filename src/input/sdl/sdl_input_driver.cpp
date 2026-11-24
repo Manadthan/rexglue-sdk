@@ -18,6 +18,7 @@
 #include <rex/input/flags.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
 #include <rex/ui/virtual_key.h>
 
 REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
@@ -481,6 +482,25 @@ void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
     case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
       REXLOG_WARN("SDL input diag: raw joystick button {} down (device {})", event.jbutton.button,
                   event.jbutton.which);
+      [[fallthrough]];
+    case SDL_EVENT_JOYSTICK_BUTTON_UP:
+#if REX_PLATFORM_ANDROID
+      // Android reports L2/R2 as key events (SDL buttons 15 and 16) besides
+      // the analog trigger axes. Use the keys as full-travel triggers until
+      // the device has shown a real trigger axis.
+      if (event.jbutton.button == 15 || event.jbutton.button == 16) {
+        auto idx = GetControllerIndexFromInstanceID(event.jbutton.which);
+        if (idx) {
+          const int t = event.jbutton.button - 15;
+          if (!trigger_axis_seen_[*idx][t]) {
+            auto& pad = controllers_.at(*idx).state.gamepad;
+            const uint8_t v = event.jbutton.down ? 255 : 0;
+            (t == 0 ? pad.left_trigger : pad.right_trigger) = v;
+            controllers_.at(*idx).state_changed = true;
+          }
+        }
+      }
+#endif
       break;
     case SDL_EVENT_GAMEPAD_ADDED:
       OnControllerDeviceAddedLocked(event);
@@ -567,6 +587,7 @@ void SDLInputDriver::OnControllerDeviceRemovedLocked(const SDL_Event& event) {
   if (idx) {
     SDL_CloseGamepad(controllers_.at(*idx).sdl);
     controllers_.at(*idx) = {};
+    trigger_axis_seen_.at(*idx) = {};
     keystroke_states_.at(*idx) = {};
     REXLOG_INFO("SDL OnControllerDeviceRemoved: Removed at player index {}.", *idx);
   } else {
@@ -593,9 +614,11 @@ void SDLInputDriver::OnControllerDeviceAxisMotionLocked(const SDL_Event& event) 
       pad.thumb_ry = ~event.gaxis.value;
       break;
     case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+      if (event.gaxis.value > 1024) trigger_axis_seen_[*idx][0] = true;
       pad.left_trigger = static_cast<uint8_t>(event.gaxis.value >> 7);
       break;
     case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+      if (event.gaxis.value > 1024) trigger_axis_seen_[*idx][1] = true;
       pad.right_trigger = static_cast<uint8_t>(event.gaxis.value >> 7);
       break;
     default:

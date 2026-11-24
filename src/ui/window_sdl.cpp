@@ -163,8 +163,12 @@ bool WindowSDL::OpenImpl() {
     // Borderless desktop fullscreen (a NULL display mode is SDL3's default).
     SDL_SetWindowFullscreen(sdl_window_, true);
   }
-  // SDL3 requires explicit opt-in for text input events.
+  // SDL3 requires explicit opt-in for text input events. Not on Android: there
+  // it focuses SDL's hidden text field, which then swallows the joystick
+  // motion events (sticks and analog triggers) meant for the game surface.
+#if !REX_PLATFORM_ANDROID
   SDL_StartTextInput(sdl_window_);
+#endif
   ApplyCursorVisibilityNow();
   SDL_ShowWindow(sdl_window_);
 

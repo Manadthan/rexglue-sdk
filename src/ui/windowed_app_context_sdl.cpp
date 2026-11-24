@@ -31,10 +31,11 @@ SDLWindowedAppContext::~SDLWindowedAppContext() {
 }
 
 bool SDLWindowedAppContext::Initialize() {
-#if !REX_PLATFORM_WIN32
+#if !REX_PLATFORM_WIN32 && !REX_PLATFORM_ANDROID
   // The Surface types the presenters consume are Win32Hwnd and XcbWindow;
   // force X11 so an xcb connection is retrievable (there is no Wayland
-  // surface type).
+  // surface type). Android has a single driver ("android") and its own
+  // ANativeWindow surface type.
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
 #endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
